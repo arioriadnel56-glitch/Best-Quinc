@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{{NOM}}</title>
+  <meta name="theme-color" content="{{COULEUR}}">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="{{NOM}}">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="/assets/style.css">
+  <style>:root { --marque: {{COULEUR}}; --sur-marque: {{SUR_COULEUR}}; }</style>
+</head>
+<body data-slug="{{SLUG}}" data-nom="{{NOM}}">
+  <div id="root"><p class="chargement">Chargement…</p></div>
+  <div id="recu-print" aria-hidden="true"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
+  <script src="/assets/config.js"></script>
+  <script src="/assets/reveil.js"></script>
+  <script src="/assets/outils.js"></script>
+  <script src="/assets/icones.js"></script>
+  <script src="/assets/hors-ligne.js"></script>
+  <script src="/assets/temps-reel.js"></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
