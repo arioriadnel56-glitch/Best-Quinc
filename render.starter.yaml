@@ -1,0 +1,54 @@
+# Blueprint Render : « New + → Blueprint » sur le dépôt GitHub. Crée en une fois le serveur ET la base PostgreSQL.
+# Guide pas à pas : DEPLOIEMENT-RENDER.md
+# Prix indicatifs (à vérifier sur render.com/pricing) : web Starter ≈ 7 $/mois, base basic-256mb ≈ 6 $/mois.
+services:
+  - type: web
+    name: best-quinca
+    runtime: node
+    plan: starter            # toujours éveillé : indispensable (temps réel, caisse). L'offre « free » s'endort après 15 min.
+    region: frankfurt        # la plus proche du Bénin ; la base doit être dans la MÊME région
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz   # répond 200 seulement si la base répond aussi
+    numInstances: 1          # le temps réel et les limites de tentatives vivent dans le processus : une seule instance
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: best-quinca-db
+          property: connectionString   # adresse interne (réseau privé Render)
+      - key: PGSSL
+        value: "false"       # réseau privé ; mettre « true » si vous utilisez l'adresse externe de la base
+      - key: JWT_SECRET
+        generateValue: true  # généré par Render ; ne le changez plus ensuite (sinon sessions et clés chiffrées perdues)
+      - key: TRUST_PROXY
+        value: "true"
+      - key: TRUSTED_IP_HEADER
+        value: cf-connecting-ip   # Render est derrière Cloudflare : cet en-tête donne la vraie adresse du visiteur
+      - key: TRUSTED_PROXY_HOPS
+        value: "2"               # repli si l'en-tête ci-dessus est absent (X-Forwarded-For : visiteur, Cloudflare)
+      - key: PUBLIC_URL
+        sync: false              # à renseigner si vous branchez votre propre domaine (https://…) ; sinon l'adresse onrender.com est utilisée
+      - key: SUPERADMIN_EMAIL
+        sync: false
+      - key: SUPERADMIN_PASSWORD
+        sync: false              # 10 caractères minimum ; à retirer après la première connexion
+      - key: CONTACT_EMAIL
+        sync: false
+      - key: EDITEUR_NOM
+        sync: false
+      - key: ANDROID_PACKAGE_NAME
+        sync: false              # voir PLAYSTORE.md
+      - key: ANDROID_SHA256_FINGERPRINTS
+        sync: false
+
+databases:
+  - name: best-quinca-db
+    plan: basic-256mb        # l'offre « free » est supprimée au bout de 30 jours et n'a aucune sauvegarde
+    region: frankfurt
+    postgresMajorVersion: "16"
+    ipAllowList: []          # base inaccessible depuis Internet : seul le serveur Best-Quinca (réseau privé) peut s'y connecter

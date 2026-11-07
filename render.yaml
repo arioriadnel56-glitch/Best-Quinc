@@ -1,0 +1,50 @@
+# Blueprint Render — offre GRATUITE (Free) : le serveur s'endort après 15 min sans requête et se réveille à la demande.
+# La base de données est sur Supabase (PostgreSQL) ; le site (vitrine + application) est hébergé à part, sur un service statique gratuit
+# (Cloudflare Pages) : il s'ouvre toujours, même quand ce serveur dort. Guide pas à pas : DEPLOIEMENT-GRATUIT.md
+# L'ancienne configuration payante (Starter, serveur toujours éveillé + base Render) est conservée dans render.starter.yaml.
+services:
+  - type: web
+    name: best-quinca-api
+    runtime: node
+    plan: free
+    region: frankfurt        # la plus proche du Bénin ; choisissez la même région pour Supabase
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    # Volontairement AUCUN healthCheckPath : une vérification périodique pourrait empêcher la mise en veille et consommer les 750 h gratuites.
+    # (L'adresse /healthz existe, mais seule l'application l'appelle, au réveil, après l'échec d'un vrai appel.)
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false              # Supabase → Connect → « Session pooler » (IPv4, port 5432). PAS la « Direct connection » (IPv6 seulement) ni le mode « Transaction ».
+      - key: PGSSL
+        value: "true"
+      - key: PG_POOL_MAX
+        value: "5"               # petit pool : le pooler Supabase limite le nombre de connexions
+      - key: JWT_SECRET
+        generateValue: true      # ne le changez plus ensuite (sinon sessions et clés chiffrées perdues). En migration depuis un ancien serveur : reprenez l'ancienne valeur.
+      - key: TRUST_PROXY
+        value: "true"
+      - key: TRUSTED_IP_HEADER
+        value: cf-connecting-ip
+      - key: TRUSTED_PROXY_HOPS
+        value: "2"
+      - key: PUBLIC_URL
+        sync: false              # adresse du SITE (Cloudflare Pages ou votre domaine), pas celle de ce serveur : elle sert aux liens de factures
+      - key: FRONTEND_ORIGIN
+        sync: false              # adresse du site autorisée à appeler cette API (CORS + temps réel), sans barre finale. Plusieurs : séparées par des virgules
+      - key: SUPERADMIN_EMAIL
+        sync: false
+      - key: SUPERADMIN_PASSWORD
+        sync: false              # 10 caractères minimum ; à retirer après la première connexion
+      - key: CONTACT_EMAIL
+        sync: false
+      - key: EDITEUR_NOM
+        sync: false
+      - key: ANDROID_PACKAGE_NAME
+        sync: false              # voir PLAYSTORE.md
+      - key: ANDROID_SHA256_FINGERPRINTS
+        sync: false

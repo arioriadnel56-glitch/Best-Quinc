@@ -1,0 +1,22 @@
+{
+  "name": "best-quinca",
+  "version": "1.8.0",
+  "description": "Best-Quinca — gestion de quincaillerie multi-entreprises (SaaS + PWA par entreprise)",
+  "private": true,
+  "main": "server/index.js",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "migrate": "node server/migrate.js",
+    "superadmin": "node scripts/creer-superadmin.js",
+    "test": "node --test test/*.test.js",
+    "build:frontend": "node scripts/build-frontend.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  },
+  "author": "ARIORI Adnel Adedeji Fulbert <arioriadnel56@gmail.com>",
+  "license": "UNLICENSED"
+}
