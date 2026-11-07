@@ -1,4 +1,0 @@
-Polices embarquées (sous-ensemble latin) :
-
-- Carlito (Regular, Bold) — Copyright 2010-2013 Łukasz Dziedzic (tyPoland) pour Google ; licence SIL Open Font License 1.1 (https://openfontlicense.org).
-- TeX Gyre Heros Cn (Bold) — Copyright 2006-2009 B. Jackowski et J.M. Nowacki (GUST) ; licence GUST Font License (équivalente à la LPPL), redistribution et modification libres.
