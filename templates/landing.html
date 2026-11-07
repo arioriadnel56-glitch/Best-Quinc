@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Best-Quinca — la caisse et le stock de votre quincaillerie</title>
+  <meta name="description" content="Gérez ventes, stock et équipe de votre quincaillerie. Chaque entreprise obtient son application installable sur téléphone ou ordinateur.">
+  <meta name="theme-color" content="#12202C">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="site">
+  <div class="site-hero">
+    <header class="site-top">
+      <a class="marque" href="/" aria-label="Best-Quinca Hardware — accueil"><img src="/assets/marque/best-quinca-clair.png" alt="Best-Quinca Hardware" width="760" height="632"></a>
+      <a class="lien" href="#acces">J'ai déjà un espace</a>
+    </header>
+
+    <section class="hero">
+      <div class="hero-texte">
+        <h1>La caisse et le stock de votre quincaillerie, dans une application à vous.</h1>
+        <p class="lead">Enregistrez vos ventes, suivez chaque sac de ciment et chaque boîte de clous, et laissez votre secrétaire encaisser sans toucher à vos prix d'achat. Votre entreprise s'installe sur téléphone ou ordinateur, à son nom.</p>
+        <p class="prix"><strong id="prix">5 000 F CFA</strong> <span id="periode">par mois</span></p>
+        <p class="prix-note">Un seul abonnement, tout est inclus. <span id="annuel">Ou 50 000 F CFA par an : 2 mois offerts.</span></p>
+        <div class="actions">
+          <a class="btn jaune gros" href="#form-inscription">Créer mon espace</a>
+          <a class="btn contour gros" href="#demo">Voir la démonstration</a>
+          <a class="btn contour gros" href="#acces">J'ai déjà un espace</a>
+        </div>
+      </div>
+      <figure class="ticket-demo" aria-label="Exemple de ticket de caisse">
+        <figcaption>Ticket n° 214</figcaption>
+        <div class="td-ligne"><span>Ciment CPJ 42,5 × 10</span><span>85 000</span></div>
+        <div class="td-ligne"><span>Fer à béton 8 mm × 24</span><span>96 000</span></div>
+        <div class="td-ligne"><span>Clous 70 mm (kg) × 3</span><span>4 500</span></div>
+        <div class="td-total"><span>Total</span><span>185 500 F</span></div>
+      </figure>
+    </section>
+  </div>
+
+  <main>
+    <section class="demo" id="demo" aria-labelledby="demo-titre">
+      <h2 id="demo-titre">Voyez Best-Quinca en action</h2>
+      <p>Quatre minutes pour tout comprendre, sur l'application réelle : créer son espace, l'installer comme une application, puis la caisse, la facture, la vente à crédit, le stock, l'inventaire et l'équipe. Activez le son : une voix française vous guide, et les explications restent écrites à l'écran.</p>
+      <div class="demo-cadre">
+        <video id="video-demo" controls preload="none" playsinline poster="/assets/video/demo-fr-poster.jpg" width="1280" height="720" aria-describedby="demo-deroule">
+          <source src="/assets/video/demo-fr.mp4" type="video/mp4">
+          <source src="/assets/video/demo-fr.webm" type="video/webm">
+          <p>Votre navigateur ne peut pas lire cette vidéo. <a href="/assets/video/demo-fr.mp4">Télécharger la vidéo (MP4)</a></p>
+        </video>
+      </div>
+      <details class="demo-texte" id="demo-deroule">
+        <summary>Lire le déroulé de la démonstration</summary>
+        <ol>
+          <li>La page d'accueil : le prix, ce que vous gagnez et le formulaire pour créer votre espace.</li>
+          <li>Création de l'espace : entreprise, nom, téléphone, e-mail et mot de passe, puis le code de récupération à noter.</li>
+          <li>Installation : votre espace devient une application sur téléphone ou ordinateur, avec son icône sur l'écran d'accueil.</li>
+          <li>Connexion : le tableau de bord résume la journée, les crédits à encaisser et le stock à renouveler.</li>
+          <li>Caisse : on touche les produits, le ticket se calcule, la facture est prête à envoyer au client sur WhatsApp.</li>
+          <li>Vente à crédit : un acompte, le reste à payer sur la facture, puis le suivi de ce que chaque client doit.</li>
+          <li>Stock : des alertes avant la rupture.</li>
+          <li>Inventaire : la secrétaire compte à l'aveugle, le propriétaire valide les écarts.</li>
+          <li>Équipe : chaque membre a ses droits, la secrétaire ne voit jamais les prix d'achat.</li>
+          <li>Abonnement : une formule mensuelle ou annuelle, sans surprise.</li>
+        </ol>
+      </details>
+    </section>
+
+    <section class="atouts" aria-label="Ce que vous gagnez">
+      <article><span class="atout-ico" data-icone="caisse"></span><h2>Encaisser en quelques secondes</h2><p>Touchez les produits, le ticket se calcule. Si le réseau coupe, les ventes sont gardées puis envoyées au retour.</p></article>
+      <article><span class="atout-ico" data-icone="stock"></span><h2>Un stock qui vous prévient</h2><p>Chaque entrée et chaque sortie est tracée. Sous le seuil, le produit remonte dans votre liste à réapprovisionner.</p></article>
+      <article><span class="atout-ico" data-icone="equipe"></span><h2>Une équipe, des droits clairs</h2><p>Votre secrétaire encaisse sans voir vos prix d'achat ni vos chiffres. Vous gardez la main sur tout le reste.</p></article>
+      <article><span class="atout-ico" data-icone="partenaires"></span><h2>Commandez chez vos fournisseurs</h2><p>Les marques partenaires proposent leurs offres, et le réassort part en un message WhatsApp.</p></article>
+    </section>
+
+    <section class="bloc deux-col">
+      <form id="form-inscription" class="carte" novalidate>
+        <h2>Créer l'espace de mon entreprise</h2>
+        <label class="champ"><span>Nom de l'entreprise</span><input name="nom_entreprise" required maxlength="150" autocomplete="organization"></label>
+        <label class="champ"><span>Votre nom complet</span><input name="nom_complet" required maxlength="150" autocomplete="name"></label>
+        <label class="champ"><span>Téléphone</span><input name="telephone" type="tel" maxlength="30" autocomplete="tel"></label>
+        <label class="champ"><span>Adresse e-mail</span><input name="email" type="email" required maxlength="150" autocomplete="email"></label>
+        <label class="champ"><span>Mot de passe (8 caractères minimum)</span><input name="mot_de_passe" type="password" required minlength="8" autocomplete="new-password"></label>
+        <p class="erreur" id="erreur-inscription" role="alert"></p>
+        <button class="btn primaire gros" type="submit">Créer mon espace</button>
+      </form>
+
+      <form id="form-acces" class="carte" novalidate>
+        <h2 id="acces">J'ai déjà un espace</h2>
+        <label class="champ"><span>Identifiant de l'espace</span><input name="slug" required maxlength="60" placeholder="ex. quincaillerie-zinsou" autocapitalize="none"></label>
+        <p class="aide">C'est la fin de l'adresse de votre application : <span class="mono">/app/<em>identifiant</em></span></p>
+        <button class="btn gros" type="submit">Ouvrir mon espace</button>
+      </form>
+    </section>
+  </main>
+
+  <footer class="site-pied"><img class="logo-pied" src="/assets/marque/best-quinca-clair.png" alt="Best-Quinca Hardware" width="760" height="632"><br>Best-Quinca — Chaque vente comptée, chaque stock maîtrisé. Fièrement conçu au Bénin pour les commerçants qui voient grand.</footer>
+  <script src="/assets/config.js"></script>
+  <script src="/assets/reveil.js"></script>
+  <script src="/assets/icones.js"></script>
+  <script src="/assets/landing.js"></script>
+</body>
+</html>
