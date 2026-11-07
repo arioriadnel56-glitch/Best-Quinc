@@ -1,0 +1,47 @@
+NARRATION — Démonstration Best-Quinca (≈ 2 minutes)
+Lisez le texte à votre rythme ; chaque paragraphe correspond à une étape à l'écran (voir les légendes).
+
+[Intro]
+Best-Quinca, c'est la caisse et le stock de votre quincaillerie, dans une application à vous.
+
+[1 — Connexion et tableau de bord]
+Vous vous connectez avec votre adresse e-mail. Le tableau de bord résume votre journée : les ventes, les crédits que vos clients vous doivent, et le stock à renouveler. Tout est visible d'un coup d'œil.
+
+[2 — La caisse]
+À la caisse, vous touchez les produits : le ticket se calcule tout seul. Vous encaissez, et la facture est prête, avec votre logo et vos informations. D'un geste, vous l'envoyez au client sur WhatsApp.
+
+[3 — La vente à crédit]
+Un client ne peut pas tout payer ? Vendez à crédit avec un acompte. La facture indique le reste à payer. Dans la page Crédits, vous suivez ce que chaque client vous doit, et vous le relancez en un geste.
+
+[4 — Le stock]
+Votre stock reste sous contrôle : dès qu'un produit passe sous son seuil, il apparaît dans votre liste à réapprovisionner, avant la rupture.
+
+[5 — L'inventaire]
+Pour l'inventaire, votre secrétaire compte les produits sans voir le stock théorique. Vous voyez les écarts, vous validez, et le stock est corrigé.
+
+[6 — L'équipe]
+Chaque membre de l'équipe a ses droits. Votre secrétaire encaisse, mais elle ne voit jamais vos prix d'achat.
+
+[7 — L'abonnement]
+Et l'abonnement est simple : une formule mensuelle ou une formule annuelle, tout est inclus.
+
+[Fin]
+Créez votre espace en deux minutes. Best-Quinca fonctionne sur téléphone comme sur ordinateur, même sans connexion.
+
+
+---
+PARTIE AJOUTÉE : page d'accueil, création de l'espace, installation (PWA)
+Vidéo complète : 3 min 45. Cette partie occupe de 0:04,6 à 1:39,8 ; la démonstration de la caisse (voix déjà posée) suit.
+Une phrase par ligne : moment où le texte apparaît à l'écran, durée disponible, texte à dire.
+
+0:06,1  ( 5.8 s)  [A — Page d'accueil]  Voici la page d'accueil de Best-Quinca : la caisse et le stock de votre quincaillerie.
+0:11,9  ( 6.0 s)  [A — Le prix]  Un seul abonnement, tout est inclus : 5 000 francs par mois, ou 50 000 francs par an.
+0:17,9  ( 7.5 s)  [A — Ce que vous gagnez]  Encaisser vite, suivre le stock, gérer l'équipe, commander chez vos fournisseurs.
+0:25,4  (25.0 s)  [B — Le formulaire]  Pour créer votre espace, remplissez ce formulaire : entreprise, nom, téléphone, e-mail et mot de passe.
+0:50,4  ( 5.8 s)  [B — L'adresse]  Votre application aura sa propre adresse, tirée du nom de l'entreprise.
+0:56,2  ( 4.0 s)  [B — Créer]  Touchez « Créer mon espace » : c'est fait en deux minutes.
+1:00,2  ( 9.0 s)  [B — Code de récupération]  Notez votre code de récupération : il n'est affiché qu'une fois, et sert si vous oubliez votre mot de passe.
+1:09,2  ( 5.2 s)  [C — Installer]  Transformez votre espace en application : touchez « Installer ».
+1:14,4  ( 7.9 s)  [C — Confirmer]  Confirmez : l'application s'installe comme depuis un magasin d'applications.
+1:22,3  ( 9.3 s)  [C — iPhone]  Sur iPhone : touchez le bouton Partager, puis « Sur l'écran d'accueil ».
+1:31,6  ( 8.2 s)  [C — Écran d'accueil]  L'icône est sur votre écran d'accueil : l'application s'ouvre en plein écran, même sans connexion.
