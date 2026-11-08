@@ -181,7 +181,10 @@ async function main() {
   server.maxHeadersCount = 100;
   if (!env.publicUrl) console.warn('Attention : PUBLIC_URL n\'est pas défini. Renseignez l\'adresse publique du site (https://…) : elle sert aux liens de factures et aux en-têtes de sécurité.');
   realtime.attach(server);
-  server.listen(env.port, () => console.log(`Best-Quinca prêt sur http://localhost:${env.port}`));
+  
+  // CORRECTION EFFECTUÉE ICI : Écoute sur '0.0.0.0' pour le cloud
+  server.listen(env.port, '0.0.0.0', () => console.log(`Best-Quinca prêt sur le port ${env.port}`));
+  
   const stop = () => { realtime.arreter(); server.close(() => db.getPool().end().finally(() => process.exit(0))); };
   process.on('unhandledRejection', (err) => console.error('Promesse rejetée non gérée :', err));
   process.on('SIGTERM', stop);
