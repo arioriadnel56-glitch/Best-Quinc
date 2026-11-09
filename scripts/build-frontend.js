@@ -117,47 +117,28 @@ async function construire({ apiUrl, sortie }) {
 
   ecrire(dist, '404.html', `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Page introuvable — Best-Quinca</title><link rel="stylesheet" href="/assets/style.css"></head><body><main class="centre"><section class="carte"><h1>Page introuvable</h1><p>Cette adresse n'existe pas.</p><a class="btn primaire" href="/">Retour à l'accueil</a></section></main></body></html>`);
 
-  // ---- Réécritures (Cloudflare Pages / Netlify : « _redirects ») ----
-  ecrire(dist, '_redirects', [
-    '# Chaque espace /app/<espace>/ reçoit la même coque : le serveur n\'est pas sollicité pour afficher l\'application',
-    '/app/:slug/manifest.webmanifest /_app/manifest.webmanifest 200',
-    '/app/:slug/sw.js /_app/sw.js 200',
-    '/app/:slug/icon-192.png /assets/marque/icone-192.png 200',
-    '/app/:slug/icon-512.png /assets/marque/icone-512.png 200',
-    '/app/:slug/icon-maskable-512.png /assets/marque/icone-maskable-512.png 200',
-    '/app/:slug/ /_app/index.html 200',
-    '/app/:slug /app/:slug/ 301',
-    '/sponsor/* /sponsor/index.html 200',
-    '',
-  ].join('\n'));
-
   // ---- En-têtes de sécurité : mêmes protections que le serveur, avec l'adresse du backend autorisée pour les appels API ----
+  // « _headers » ne s'applique qu'aux fichiers : les réponses des fonctions (/app/…, /sponsor/…) reprennent le même jeu depuis /_app/entetes.json
   const csp = CSP.replace("connect-src 'self'", `connect-src 'self' ${api}`);
+  const entetes = {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'same-origin',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Content-Security-Policy': csp,
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), bluetooth=()',
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  };
+  ecrire(dist, '_app/entetes.json', JSON.stringify(entetes));
   ecrire(dist, '_headers', [
     '/*',
-    '  X-Content-Type-Options: nosniff',
-    '  Referrer-Policy: same-origin',
-    '  X-Frame-Options: SAMEORIGIN',
-    `  Content-Security-Policy: ${csp}`,
-    '  Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), bluetooth=()',
-    '  Cross-Origin-Opener-Policy: same-origin-allow-popups',
-    '  Strict-Transport-Security: max-age=31536000; includeSubDomains',
-    '/_app/sw.js',
-    '  Cache-Control: no-cache',
-    '/app/:slug/sw.js',
-    '  Cache-Control: no-cache',
+    ...Object.entries(entetes).map(([k, v]) => `  ${k}: ${v}`),
     '/admin',
     '  Cache-Control: no-store',
     '  X-Robots-Tag: noindex, nofollow',
-    '/sponsor/*',
-    '  Cache-Control: no-store',
-    '  Referrer-Policy: no-referrer',
-    '  X-Robots-Tag: noindex, nofollow',
     '',
   ].join('\n'));
 
-  console.warn = warn;
-  console.error = error;
   return { dist, version, api };
 }
 
