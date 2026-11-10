@@ -3,6 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
 const { env, assertEnv } = require('./lib/env');
 const { Router } = require('./lib/router');
 const { HttpError, json, send, readJson, clientIp } = require('./lib/http');
@@ -34,17 +35,15 @@ function serveAsset(req, res, pathname) {
   const media = ext === '.mp4' || ext === '.webm';
   const headers = {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    // Polices et médias ne changent pas : on évite de les revalider à chaque page
     'Cache-Control': ext === '.woff' ? 'public, max-age=604800' : (media || ext === '.jpg') ? 'public, max-age=86400' : 'no-cache',
     'Accept-Ranges': 'bytes',
     ETag: etag,
   };
   if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); return res.end(); }
-  // Lecture partielle (en-tête Range) : indispensable pour la vidéo sur iPhone/Safari et pour avancer dans la vidéo
   const rg = req.headers.range ? /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range).trim()) : null;
   if (rg && (rg[1] !== '' || rg[2] !== '')) {
     let debut; let fin;
-    if (rg[1] === '') { debut = Math.max(0, st.size - Number(rg[2])); fin = st.size - 1; } // « les N derniers octets »
+    if (rg[1] === '') { debut = Math.max(0, st.size - Number(rg[2])); fin = st.size - 1; }
     else { debut = Number(rg[1]); fin = rg[2] === '' ? st.size - 1 : Math.min(Number(rg[2]), st.size - 1); }
     if (!(debut <= fin) || debut >= st.size) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
     res.writeHead(206, { ...headers, 'Content-Range': `bytes ${debut}-${fin}/${st.size}`, 'Content-Length': fin - debut + 1 });
@@ -52,7 +51,7 @@ function serveAsset(req, res, pathname) {
     flux.on('error', () => res.destroy());
     return flux.pipe(res);
   }
-  if (st.size > 1024 * 1024) { // gros fichier : envoi en flux, sans le charger en mémoire
+  if (st.size > 1024 * 1024) {
     res.writeHead(200, { ...headers, 'Content-Length': st.size });
     const flux = fs.createReadStream(file);
     flux.on('error', () => res.destroy());
@@ -68,8 +67,6 @@ function notFoundPage(res, message = 'Page introuvable.') {
   return send(res, 404, html, { 'Content-Type': 'text/html; charset=utf-8' });
 }
 
-// Politique de sécurité du contenu : seuls nos propres scripts s'exécutent, plus les widgets de paiement KkiaPay et FedaPay.
-// Aucun script ni gestionnaire en ligne n'est autorisé : une injection de code dans une page reste inopérante.
 const CSP = [
   "default-src 'self'",
   "script-src 'self' https://cdn.kkiapay.me https://cdn.fedapay.com",
@@ -92,8 +89,6 @@ function enHttps(req) {
   return env.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',').pop().trim() === 'https';
 }
 
-// CORS : seul le frontend déclaré (FRONTEND_ORIGIN) peut appeler l'API depuis un autre domaine.
-// L'authentification passe par l'en-tête Authorization (jamais par cookie) : aucune requête n'est envoyée avec des identifiants ambiants.
 function cors(req, res) {
   const origine = req.headers.origin;
   if (!origine || !env.frontendOrigins.length) return { demande: false, autorise: false };
@@ -117,14 +112,13 @@ async function handle(req, res) {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), usb=(), bluetooth=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   if (enHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-  // Une adresse illisible ne doit jamais faire tomber le serveur
+  
   let url;
   try { url = new URL(req.url, 'http://localhost'); } catch { return json(res, 400, { erreur: 'Adresse invalide.' }); }
   const pathname = url.pathname;
   const isApi = pathname.startsWith('/api/');
   const c = cors(req, res);
   if (req.method === 'OPTIONS') {
-    // Pré-vérification du navigateur : réponse immédiate, sans toucher à la base
     res.writeHead(c.autorise ? 204 : 403, { 'Content-Length': '0' });
     return res.end();
   }
@@ -170,7 +164,6 @@ async function main() {
   await migrate();
   await bootstrapFromEnv();
   const server = http.createServer((req, res) => {
-    // Aucune erreur, même imprévue, ne doit arrêter le serveur
     handle(req, res).catch((err) => {
       console.error('Erreur non gérée :', err);
       if (!res.headersSent) { try { json(res, 500, { erreur: 'Erreur interne du serveur.' }); } catch { res.destroy(); } } else res.destroy();
@@ -182,7 +175,6 @@ async function main() {
   if (!env.publicUrl) console.warn('Attention : PUBLIC_URL n\'est pas défini. Renseignez l\'adresse publique du site (https://…) : elle sert aux liens de factures et aux en-têtes de sécurité.');
   realtime.attach(server);
   
-  // CORRECTION EFFECTUÉE ICI : Écoute sur '0.0.0.0' pour le cloud
   server.listen(env.port, '0.0.0.0', () => console.log(`Best-Quinca prêt sur le port ${env.port}`));
   
   const stop = () => { realtime.arreter(); server.close(() => db.getPool().end().finally(() => process.exit(0))); };
