@@ -35,7 +35,7 @@
     const lieu = opt.location || null;
     const ecran = opt.ecran || null;
 
-    const etat = { serveur: 'inconnu', tentative: 0, max: delais.length + 1, depuis: 0, dernierSucces: 0 };
+    const etat = { serveur: 'inconnu', tentative: 0, max: delais.length + 1, depuis: 0, dernierSucces: 0, cause: '' };
     const ecouteurs = new Set();
     let promesse = null;
     let abandon = false;
@@ -112,6 +112,14 @@
       }
     }
 
+    // Après l'échec de tous les essais : le serveur est-il au moins joignable ? Une requête « no-cors » aboutit dès que le serveur répond,
+    // même si le navigateur n'a pas le droit de lire la réponse (site non autorisé, CORS) ou si la réponse est une erreur 5xx.
+    async function serveurJoignable() {
+      const ctrl = new AbortController();
+      const minuteur = poser(() => ctrl.abort(), delaiSonde);
+      try { await appelFetch(url('/healthz'), { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal }); return true; } catch { return false; } finally { retirer(minuteur); }
+    }
+
     // Réveille le serveur (une seule boucle à la fois, partagée par tous les appelants). Résout true quand il est prêt.
     function reveiller({ avecEcran = false } = {}) {
       if (!promesse) {
@@ -129,6 +137,7 @@
             if (await sonder()) { marquerPret(); return true; }
             if (i < delais.length && !abandon) await attendre(delais[i]);
           }
+          etat.cause = (await serveurJoignable()) ? 'joignable' : 'injoignable';
           etat.serveur = 'indisponible';
           notifier();
           return false;
@@ -147,7 +156,7 @@
         const ok = await reveiller({ avecEcran });
         if (ok) { if (ecran) ecran.masquer(); return true; }
         if (!avecEcran || !ecran) return false;
-        const choix = await ecran.echec({ peutContinuer, hors_ligne: !enLigne() });
+        const choix = await ecran.echec({ peutContinuer, hors_ligne: !enLigne(), cause: etat.cause });
         if (choix === 'continuer') { ecran.masquer(); return false; }
       }
     }
@@ -216,7 +225,7 @@
       horloge = setInterval(maj, 1000);
     }
 
-    function afficherEchec({ peutContinuer, hors_ligne }) {
+    function afficherEchec({ peutContinuer, hors_ligne, cause }) {
       monter();
       arreterSuivi();
       el.classList.add('echec');
@@ -224,7 +233,10 @@
       champ('texte').textContent = hors_ligne
         ? 'Vérifiez votre réseau. Ce qui est enregistré sur cet appareil est conservé.'
         : 'Le serveur ou la base de données est injoignable pour le moment. Vérifiez votre connexion, puis réessayez. Ce qui est enregistré sur cet appareil est conservé.';
-      champ('detail').textContent = '';
+      // Le serveur répond mais sa réponse n'est pas utilisable : c'est un problème de configuration, pas de connexion
+      champ('detail').textContent = !hors_ligne && cause === 'joignable'
+        ? 'Le serveur est joignable mais sa réponse est refusée ou en erreur (site non autorisé par le serveur, ou démarrage en échec). Administrateur : vérifiez FRONTEND_ORIGIN et les journaux du serveur.'
+        : '';
       return new Promise((resoudre) => {
         const reessayer = noeud('button', 'btn primaire', 'Réessayer');
         reessayer.type = 'button';
