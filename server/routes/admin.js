@@ -117,7 +117,6 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
-  // Jours d'abonnement offerts (geste commercial, rattrapage d'un paiement...)
   router.post('/api/admin/entreprises/:id/offrir', authAdmin, async (ctx) => {
     const id = int(ctx.params.id, 'entreprise', { min: 1 });
     const jours = int(ctx.body.jours, 'nombre de jours', { min: 1, max: 366 });
@@ -149,7 +148,6 @@ module.exports = function register(router) {
     return rows;
   });
 
-  // Mot de passe provisoire : affiché une seule fois ; l'utilisateur devra en choisir un nouveau dès sa connexion
   router.post('/api/admin/entreprises/:id/utilisateurs/:uid/reinitialiser', authAdmin, async (ctx) => {
     const id = int(ctx.params.id, 'entreprise', { min: 1 });
     const uid = int(ctx.params.uid, 'utilisateur', { min: 1 });
@@ -165,7 +163,6 @@ module.exports = function register(router) {
     return { email: r.rows[0].email, mot_de_passe_temporaire: temporaire };
   });
 
-  // Nouveau code de récupération à remettre au propriétaire (l'ancien cesse de fonctionner)
   router.post('/api/admin/entreprises/:id/utilisateurs/:uid/code-recuperation', authAdmin, async (ctx) => {
     const id = int(ctx.params.id, 'entreprise', { min: 1 });
     const uid = int(ctx.params.uid, 'utilisateur', { min: 1 });
@@ -193,7 +190,6 @@ module.exports = function register(router) {
     return rows;
   });
 
-  // Remise à zéro du tableau de bord d'une quincaillerie (fin d'inventaire) : statistiques seulement, rien n'est supprimé
   router.post('/api/admin/entreprises/:id/tableau-remise', authAdmin, async (ctx) => {
     const id = int(ctx.params.id, 'entreprise', { min: 1 });
     const note = str(ctx.body.note, 'note', { optional: true, max: 255 });
@@ -208,21 +204,20 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
-  // ---- Paramètres (clés API, prix) ----
+  // ---- Paramètres ----
   router.get('/api/admin/parametres', authAdmin, async () => ({
     parametres: await settings.describe(),
     webhook_kkiapay: '/api/webhooks/kkiapay',
     webhook_fedapay: '/api/webhooks/fedapay',
   }));
 
-  // body : { valeurs: { cle: valeur }, effacer: [cle] } — une clé secrète vide n'est jamais écrasée
   router.put('/api/admin/parametres', authAdmin, async (ctx) => {
     const valeurs = ctx.body.valeurs && typeof ctx.body.valeurs === 'object' && !Array.isArray(ctx.body.valeurs) ? ctx.body.valeurs : {};
     const effacer = Array.isArray(ctx.body.effacer) ? ctx.body.effacer : [];
     const aEcrire = {};
     for (const [k, v] of Object.entries(valeurs)) {
       if (!settings.DEFS[k]) throw new HttpError(400, `Paramètre inconnu : ${k}.`);
-      if (settings.DEFS[k].secret && (v === '' || v === null || v === undefined)) continue; // champ laissé vide : on conserve
+      if (settings.DEFS[k].secret && (v === '' || v === null || v === undefined)) continue;
       aEcrire[k] = settings.normaliser(k, v);
     }
     for (const k of effacer) {
@@ -231,7 +226,6 @@ module.exports = function register(router) {
     }
     if (!Object.keys(aEcrire).length && !effacer.length) throw new HttpError(400, 'Aucune modification à enregistrer.');
     await settings.save(aEcrire, effacer);
-    // Journal sans valeurs : seul le nom des paramètres est tracé
     console.log(`[admin ${ctx.admin.email}] paramètres modifiés : ${[...Object.keys(aEcrire), ...effacer.map((k) => `${k} (effacé)`)].join(', ')}`);
     return { parametres: await settings.describe() };
   });
