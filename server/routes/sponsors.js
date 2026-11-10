@@ -14,11 +14,10 @@ const S = require('../lib/sponsors');
 const sponsorHtml = fs.readFileSync(path.join(__dirname, '..', 'templates', 'sponsor.html'), 'utf8');
 const proprio = role('proprietaire');
 const base = [auth, subscribed];
-const nouveauJeton = () => crypto.randomBytes(24).toString('hex'); // 48 caractères, impossible à deviner
+const nouveauJeton = () => crypto.randomBytes(24).toString('hex');
 
 const LOGO = '(si.sponsor_id IS NOT NULL) AS a_logo, (EXTRACT(EPOCH FROM si.modifie_le))::bigint AS logo_v';
 
-// Une boutique a vu ou cliqué une offre : une seule trace par jour (clé primaire), sans doublon
 async function tracer(entrepriseId, offreIds, type) {
   if (!offreIds.length) return;
   await db.query(
@@ -58,7 +57,6 @@ module.exports = function register(router) {
   // Côté boutique
   // =====================================================================
 
-  // Page « Partenaires » : les partenaires sous contrat et leurs offres en cours
   router.get('/api/partenaires', ...base, async (ctx) => {
     const s = await db.query(
       `SELECT s.id, s.nom, s.description, s.site_web, ${LOGO}
@@ -74,13 +72,11 @@ module.exports = function register(router) {
     return { partenaires: s.rows, offres: o.rows };
   });
 
-  // Liste légère pour le formulaire produit (ne compte aucune « vue »)
   router.get('/api/partenaires/marques', ...base, async () => {
     const { rows } = await db.query(`SELECT s.id, s.nom FROM sponsors s WHERE ${S.SPONSOR_ACTIF} ORDER BY s.nom`);
     return rows;
   });
 
-  // Une offre mise en avant sur le tableau de bord : même offre toute la journée pour une boutique, qui change d'un jour à l'autre
   router.get('/api/partenaires/banniere', ...base, async (ctx) => {
     const { rows } = await db.query(
       `SELECT o.id, o.titre, o.texte, s.id AS sponsor_id, s.nom AS sponsor, ${LOGO}
@@ -106,7 +102,6 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
-  // Logo d'un partenaire (public, comme un logo de site)
   router.get('/partenaires/:id/logo', async (ctx) => {
     const id = int(ctx.params.id, 'partenaire', { min: 1 });
     const { rows } = await db.query('SELECT logo, logo_type FROM sponsor_images WHERE sponsor_id = $1', [id]);
@@ -115,7 +110,6 @@ module.exports = function register(router) {
     ctx.raw = { status: 200, headers: { 'Content-Type': r.logo_type, 'Cache-Control': 'public, max-age=3600' }, body: r.logo };
   });
 
-  // Produits à renouveler fournis par un partenaire, regroupés par partenaire, avec une quantité proposée
   router.get('/api/reassort', ...base, async (ctx) => {
     const { rows } = await db.query(
       `SELECT p.id, p.nom, p.unite, p.quantite_stock, p.seuil_alerte, s.id AS sponsor_id, s.nom AS sponsor,
@@ -136,7 +130,6 @@ module.exports = function register(router) {
     return [...groupes.values()];
   });
 
-  // La commande part en message WhatsApp au distributeur ; on en garde la trace pour l'historique et les statistiques
   router.post('/api/reassort/commandes', ...base, proprio, async (ctx) => {
     const eid = ctx.user.entreprise_id;
     await limit(`reassort:${eid}`, 30, 3600 * 1000);
@@ -184,7 +177,6 @@ module.exports = function register(router) {
     return rows;
   });
 
-  // Accord de la boutique : ses ventes entrent, anonymes et groupées, dans les statistiques des partenaires (désactivé par défaut)
   router.put('/api/entreprise/partage-stats', auth, proprio, async (ctx) => {
     if (typeof ctx.body.actif !== 'boolean') throw new HttpError(400, 'Valeur invalide.');
     await db.query('UPDATE entreprises SET partage_stats = $1 WHERE id = $2', [ctx.body.actif, ctx.user.entreprise_id]);
@@ -192,7 +184,7 @@ module.exports = function register(router) {
   });
 
   // =====================================================================
-  // Super admin
+  // Super admin (Protéges par authAdmin)
   // =====================================================================
   router.get('/api/admin/sponsors', authAdmin, async () => {
     const { rows } = await db.query(
@@ -232,7 +224,6 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
-  // Nouvelle adresse de rapport : l'ancienne cesse aussitôt de fonctionner
   router.post('/api/admin/sponsors/:id/jeton', authAdmin, async (ctx) => {
     const id = int(ctx.params.id, 'partenaire', { min: 1 });
     const jeton = nouveauJeton();
@@ -301,7 +292,6 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
-  // Les commandes de réassort reçues par un partenaire (là, la boutique est nommée : c'est elle qui a passé commande)
   router.get('/api/admin/sponsors/:id/commandes', authAdmin, async (ctx) => {
     const { rows } = await db.query(
       `SELECT c.id, e.nom AS entreprise, e.telephone, c.lignes, c.note, to_char(c.cree_le AT TIME ZONE $2, 'YYYY-MM-DD HH24:MI') AS cree_le
@@ -322,7 +312,7 @@ module.exports = function register(router) {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Robots-Tag': 'noindex, nofollow',
-        'Referrer-Policy': 'no-referrer', // l'adresse contient le secret : elle ne doit jamais partir dans un en-tête Referer
+        'Referrer-Policy': 'no-referrer',
       },
       body: sponsorHtml,
     };
@@ -342,7 +332,6 @@ module.exports = function register(router) {
     const sid = sponsor.id;
     const K = S.SEUIL_ANONYMAT;
 
-    // Seules comptent les boutiques qui ont donné leur accord (partage_stats) et vendent au moins un produit du partenaire
     const reseau = await db.query(
       `SELECT COUNT(DISTINCT e.id)::int AS nb FROM entreprises e JOIN produits p ON p.entreprise_id = e.id AND p.sponsor_id = $1
         WHERE e.partage_stats = true AND e.statut = 'actif'`,
@@ -358,7 +347,6 @@ module.exports = function register(router) {
 
     let mensuel = []; let topProduits = []; let villes = []; let enAlerte = null;
     if (publiable) {
-      // Chaque chiffre publié repose sur au moins K boutiques différentes (HAVING), sinon il est omis
       mensuel = (await db.query(
         `SELECT to_char(date_trunc('month', v.cree_le AT TIME ZONE $2), 'YYYY-MM') AS mois,
                 SUM(l.quantite)::int AS quantite, SUM(l.sous_total)::bigint AS ca, COUNT(DISTINCT v.entreprise_id)::int AS boutiques
@@ -388,7 +376,6 @@ module.exports = function register(router) {
       enAlerte = alerte.rows[0] ? alerte.rows[0].nb : 0;
     }
 
-    // Audience des offres et commandes de réassort : ce sont des actions faites auprès du partenaire, pas des ventes des boutiques
     const offres = (await db.query(
       `SELECT o.id, o.titre, to_char(o.debut, 'YYYY-MM-DD') AS debut, to_char(o.fin, 'YYYY-MM-DD') AS fin, o.actif,
               (SELECT COUNT(DISTINCT x.entreprise_id) FROM sponsor_evenements x WHERE x.offre_id = o.id AND x.type = 'vue')::int AS vues,
