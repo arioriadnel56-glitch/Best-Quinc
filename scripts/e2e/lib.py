@@ -1,4 +1,6 @@
-import json, time, urllib.request, subprocess
+import psycopg2, time, urllib.request, subprocess
+import json
+
 FRONT='http://127.0.0.1:3102'; API='http://127.0.0.1:3101'; CTRL='http://127.0.0.1:3199'
 def ctrl(chemin):
     return json.loads(urllib.request.urlopen(CTRL+chemin).read().decode() or 'null') if chemin.startswith('/mode') or chemin.startswith('/journal') else urllib.request.urlopen(CTRL+chemin).read()
@@ -6,7 +8,17 @@ def mode(**kw):
     q='&'.join(f'{k}={v}' for k,v in kw.items()); return ctrl('/mode?'+q)
 def journal(depuis=0): return ctrl(f'/journal?depuis={depuis}')
 def sql(req):
-    return subprocess.run(['su','postgres','-c',f'psql -h /tmp -p 5433 -d bq -At -c "{req}"'],capture_output=True,text=True).stdout.strip()
+    conn = psycopg2.connect(database="bq", host="/tmp", port=5433, user="postgres")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(req)
+            if cur.description:
+                rows = cur.fetchall()
+                return "\n".join("|".join(str(col) for col in row) for row in rows)
+            conn.commit()
+            return ""
+    finally:
+        conn.close()
 def api(methode, chemin, jeton=None, corps=None):
     r=urllib.request.Request(API+chemin, method=methode, data=json.dumps(corps).encode() if corps is not None else None, headers={'Content-Type':'application/json', **({'Authorization':'Bearer '+jeton} if jeton else {})})
     return json.loads(urllib.request.urlopen(r).read().decode())
