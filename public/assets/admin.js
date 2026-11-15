@@ -99,6 +99,7 @@
   // Temps réel : un paiement ou une inscription apparaît sans recharger la page
   let tempsReel = null;
   let minuteurMaj = null;
+  let minuteurNotif = null;
   function ouvrirTempsReel() {
     if (tempsReel || !window.BQWS) return;
     tempsReel = window.BQWS.connecter({
@@ -120,6 +121,11 @@
   }
 
   function deconnecter() {
+    if (state.token) {
+      // Fermeture de la session côté serveur (sans attendre : la déconnexion locale est immédiate)
+      R.appeler('/api/admin/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` }, body: '{}' }, { delai: 5000 }).catch(() => {});
+    }
+    clearInterval(minuteurNotif);
     if (tempsReel) { tempsReel.fermer(); tempsReel = null; }
     localStorage.removeItem(TOKEN_KEY);
     state.token = null;
@@ -142,6 +148,8 @@
           const r = await api('/login', { method: 'POST', body: { email: mail.value, mot_de_passe: pwd.value } });
           state.token = r.token;
           localStorage.setItem(TOKEN_KEY, r.token);
+          // Le serveur indique l'espace du rôle : /admin/super, /admin/finance ou /admin/security
+          if (r.redirection && location.pathname.replace(/\/+$/, '') !== r.redirection) { location.assign(r.redirection); return; }
           await demarrer();
         } catch (err) { erreur.textContent = err.message; btn.disabled = false; }
       } },
@@ -151,27 +159,62 @@
         champ('Adresse e-mail', mail), champ('Mot de passe', pwd), erreur, btn)));
   }
 
-  // ---------- Coque ----------
-  const ONGLETS = [['tableau', 'Vue d\'ensemble'], ['entreprises', 'Entreprises'], ['paiements', 'Paiements'], ['sponsors', 'Sponsors'], ['parametres', 'Paramètres'], ['compte', 'Mon compte']];
+  // ---------- Coque : menu latéral propre à chaque rôle ----------
   const VUES = {};
+  const VUES_PAR_ESPACE = { super: VUES, finance: {}, security: {} };
+  // Les chaînes sont des titres de groupe ; les paires [identifiant, libellé] sont des pages
+  const MENUS = {
+    super: [
+      'Gouvernance', ['tableau', 'Vue d\'ensemble'], ['demandes', 'Demandes à valider'], ['admins', 'Administrateurs'], ['roles', 'Rôles et permissions'], ['activite', 'Activité'],
+      'Plateforme', ['entreprises', 'Entreprises'], ['abonnements', 'Abonnements'], ['finances', 'Finances'], ['paiements', 'Paiements'], ['securite', 'Sécurité'], ['sponsors', 'Sponsors'],
+      'Configuration', ['parametres', 'Paramètres'], ['systeme', 'Système et sauvegardes'], ['compte', 'Mon compte'],
+    ],
+    finance: [], security: [],
+  };
+  const premierEcran = (espace) => (MENUS[espace].find((m) => typeof m !== 'string') || ['compte'])[0];
 
   function afficherCoque() {
+    const espace = state.admin.espace;
+    const liens = MENUS[espace].map((m) => (typeof m === 'string'
+      ? h('div', { class: 'groupe' }, m)
+      : h('a', { href: `#/${m[0]}`, 'data-route': m[0] }, m[1])));
     root.replaceChildren(
       h('header', { class: 'admin-top' }, h('strong', {}, h('img', { class: 'logo-admin', src: '/assets/marque/best-quinca-clair.png', alt: 'Best-Quinca Hardware' }), 'Administration'),
         h('span', {}, state.admin.nom_complet),
+        h('button', { class: 'btn petit cloche', type: 'button', onclick: ouvrirNotifications, 'aria-label': 'Notifications' }, 'Notifications', h('span', { class: 'compteur', id: 'compteur', hidden: true })),
         h('button', { class: 'btn petit', type: 'button', onclick: deconnecter }, 'Se déconnecter')),
-      h('nav', { class: 'onglets', 'aria-label': 'Sections' }, ONGLETS.map(([id, t]) => h('a', { href: `#/${id}`, 'data-route': id }, t))),
-      h('main', { class: 'admin-vue', id: 'vue', tabindex: '-1' }));
+      h('div', { class: 'admin-corps' },
+        h('nav', { class: 'admin-menu', 'aria-label': 'Sections' }, h('span', { class: 'role-badge' }, state.admin.role_libelle), liens),
+        h('main', { class: 'admin-vue', id: 'vue', tabindex: '-1' })));
+    chargerNotifications();
+    clearInterval(minuteurNotif);
+    minuteurNotif = setInterval(() => { if (document.visibilityState === 'visible') chargerNotifications(); }, 60000);
+  }
+
+  let notifications = { total: 0, items: [] };
+  async function chargerNotifications() {
+    try { notifications = await api('/notifications'); } catch { return; }
+    const c = document.getElementById('compteur');
+    if (c) { c.textContent = notifications.total > 99 ? '99+' : String(notifications.total); c.hidden = !notifications.total; }
+  }
+  function ouvrirNotifications() {
+    const d = modale('Notifications', notifications.items.length
+      ? h('ul', { class: 'liste' }, notifications.items.map((i) => h('li', {}, h('span', {}, i.texte), h('a', { class: 'btn petit', href: i.lien, onclick: () => d.close() }, 'Ouvrir'))))
+      : h('p', { class: 'aide' }, 'Rien à traiter pour le moment.'));
   }
 
   async function router() {
     const vue = document.getElementById('vue');
-    if (!vue) return;
-    let nom = (location.hash.replace(/^#\/?/, '') || 'tableau');
-    if (!VUES[nom]) nom = 'tableau';
-    document.querySelectorAll('.onglets a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom));
+    if (!vue || !state.admin) return;
+    const espace = state.admin.espace;
+    const vues = VUES_PAR_ESPACE[espace] || {};
+    let nom = location.hash.replace(/^#\/?/, '') || premierEcran(espace);
+    // Mot de passe provisoire : seul « Mon compte » est accessible (le serveur l'impose aussi)
+    if (state.admin.mdp_temporaire) nom = 'compte';
+    if (!vues[nom]) nom = premierEcran(espace);
+    document.querySelectorAll('.admin-menu a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom));
     remplacer(vue, h('p', { class: 'chargement' }, 'Chargement…'));
-    try { await VUES[nom](vue); } catch (e) {
+    try { await vues[nom](vue); } catch (e) {
       if (e.status === 401) return;
       remplacer(vue, h('section', { class: 'carte' }, h('h1', {}, "Impossible d'afficher cette page"), h('p', {}, e.message),
         h('button', { class: 'btn', type: 'button', onclick: router }, 'Réessayer')));
@@ -180,16 +223,21 @@
 
   // ---------- Vue d'ensemble ----------
   VUES.tableau = async (vue) => {
-    const d = await api('/stats');
+    const [d, g] = await Promise.all([api('/stats'), api('/super/dashboard').catch(() => null)]);
     const stat = (t, v, detail, alerte) => h('div', { class: 'stat' + (alerte ? ' alerte' : '') },
       h('span', { class: 'stat-titre' }, t), h('strong', { class: 'stat-valeur' }, typeof v === 'string' ? unite(v) : v), detail && h('span', { class: 'stat-detail' }, detail));
     const max = Math.max(1, ...d.serie.map((s) => s.total));
     remplacer(vue, h('h1', {}, "Vue d'ensemble"),
-      h('div', { class: 'stats' },
+      h('div', { class: 'stats egales' },
         stat('Entreprises', nombre(d.entreprises.total), `${nombre(d.entreprises.nouvelles_mois)} nouvelle(s) ce mois-ci`),
         stat('Abonnements actifs', nombre(d.abonnes.actifs), `dont ${nombre(d.abonnes.payants)} payant(s)`),
         stat('Revenus du mois', fcfa(d.revenus.mois), `${fcfa(d.revenus.total)} au total`),
         stat('Entreprises suspendues', nombre(d.entreprises.suspendues), null, d.entreprises.suspendues > 0)),
+      g && h('div', { class: 'stats egales' },
+        stat('Demandes à valider', nombre(g.demandes_en_attente), h('a', { href: '#/demandes' }, 'Ouvrir'), g.demandes_en_attente > 0),
+        stat('Alertes de sécurité', nombre(g.alertes.n), `dont ${nombre(g.alertes.graves)} grave(s)`, g.alertes.graves > 0),
+        stat('Administrateurs actifs', nombre(g.admins.actifs), `sur ${nombre(g.admins.total)} compte(s)`),
+        stat('Dépenses du mois', fcfa(g.depenses_mois), 'hébergement, domaines, services')),
       h('section', { class: 'carte' }, h('h2', {}, 'Revenus des 6 derniers mois'),
         d.serie.length
           ? h('div', { class: 'barres' }, d.serie.map((s) => h('div', { class: 'barre', title: `${s.mois} : ${fcfa(s.total)}` },
@@ -578,18 +626,111 @@
     const ancien = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
     const nouveau = h('input', { type: 'password', required: true, minlength: 10, autocomplete: 'new-password' });
     const btn = h('button', { class: 'btn primaire', type: 'submit' }, 'Changer le mot de passe');
+    const activite = await api('/moi/activite').catch(() => []);
     remplacer(vue, h('h1', {}, 'Mon compte'),
-      h('form', { class: 'carte', novalidate: true, onsubmit: (e) => {
-        e.preventDefault();
-        agir(btn, async () => {
-          await api('/mot-de-passe', { method: 'POST', body: { ancien: ancien.value, nouveau: nouveau.value } });
-          ancien.value = ''; nouveau.value = '';
-          toast('Mot de passe modifié.');
-        });
-      } },
-        h('p', {}, `Connecté en tant que ${state.admin.nom_complet} (${state.admin.email}).`),
-        champ('Mot de passe actuel', ancien), champ('Nouveau mot de passe (10 caractères minimum)', nouveau), btn));
+      state.admin.mdp_temporaire && h('section', { class: 'carte attention' }, h('p', {}, h('strong', {}, 'Mot de passe provisoire : '), 'choisissez maintenant un mot de passe personnel pour accéder à votre espace.')),
+      h('div', { class: 'deux-col' },
+        h('form', { class: 'carte', novalidate: true, onsubmit: (e) => {
+          e.preventDefault();
+          agir(btn, async () => {
+            await api('/mot-de-passe', { method: 'POST', body: { ancien: ancien.value, nouveau: nouveau.value } });
+            toast('Mot de passe modifié.');
+            state.admin.mdp_temporaire = false;
+            ancien.value = ''; nouveau.value = '';
+            router();
+          });
+        } },
+          h('p', {}, `Connecté en tant que ${state.admin.nom_complet} (${state.admin.email}).`),
+          h('p', {}, h('span', { class: 'puce ok' }, state.admin.role_libelle)),
+          champ('Mot de passe actuel', ancien), champ('Nouveau mot de passe (10 caractères minimum)', nouveau), btn),
+        h('section', { class: 'carte' }, h('h2', {}, 'Mes permissions'),
+          h('p', { class: 'petit-texte' }, `${state.admin.permissions.length} permission(s) attribuée(s) à votre rôle. Elles sont vérifiées par le serveur à chaque action.`),
+          h('p', { class: 'petit-texte' }, state.admin.permissions.join(' · ')))),
+      h('section', { class: 'carte' }, h('h2', {}, 'Mon activité récente'),
+        ui.tableau(['Date', 'Action', 'Cible', 'Résultat'], activite.slice(0, 30).map((a) => [a.cree_le, h('span', { class: 'mono' }, a.action), a.cible_type ? `${a.cible_type} ${a.cible_id || ''}` : '—', ui.puce(a.resultat, a.resultat === 'succes' ? 'ok' : 'alerte')]), { vide: 'Aucune activité enregistrée.' })));
   };
+
+  // ---------- Aides partagées avec les modules d'espace (admin-super.js, admin-finance.js, admin-securite.js) ----------
+  const ui = {
+    stat: (t, v, detail, alerte) => h('div', { class: 'stat' + (alerte ? ' alerte' : '') },
+      h('span', { class: 'stat-titre' }, t), h('strong', { class: 'stat-valeur' }, typeof v === 'string' ? unite(v) : v), detail && h('span', { class: 'stat-detail' }, detail)),
+    puce: (texte, classe = '') => h('span', { class: `puce ${classe}` }, texte),
+    // colonnes : libellés ; lignes : tableaux de cellules (texte ou éléments) ; { num: [indices de colonnes alignées à droite] }
+    tableau(colonnes, lignes, { vide = 'Aucun élément.', num = [] } = {}) {
+      return h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+        h('thead', {}, h('tr', {}, colonnes.map((t, i) => h('th', { class: num.includes(i) ? 'num' : '' }, t)))),
+        h('tbody', {}, lignes.length ? lignes.map((l) => h('tr', {}, l.map((c, i) => h('td', { class: num.includes(i) ? 'num' : '' }, c)))) : h('tr', {}, h('td', { colspan: colonnes.length, class: 'aide' }, vide)))));
+    },
+    // Barres simples ou groupées : series = [{ cle, classe }], donnees = [{ libelle, ...valeurs }]
+    barres(donnees, series, titre, fmt = fcfa) {
+      const max = Math.max(1, ...donnees.flatMap((d) => series.map((x) => Number(d[x.cle]) || 0)));
+      return h('div', {}, h('div', { class: 'barres', role: 'img', 'aria-label': titre },
+        donnees.map((d) => h('div', { class: 'barre-groupe', title: `${d.libelle} : ${series.map((x) => `${x.nom} ${fmt(d[x.cle])}`).join(' · ')}` },
+          h('div', { class: 'barre-paire' }, series.map((x) => h('span', { class: `barre-fut ${x.classe || ''}`, style: `height:${Math.max(1, Math.round(((Number(d[x.cle]) || 0) / max) * 100))}%` }))),
+          h('span', { class: 'barre-lib' }, d.libelle)))),
+        series.length > 1 && h('div', { class: 'legende' }, series.map((x) => h('span', {}, h('i', { style: `background:${x.classe === 'depense' ? 'color-mix(in srgb, var(--rouille) 55%, white)' : 'var(--marque)'}` }), x.nom))));
+    },
+    // Fenêtre de formulaire : champs = [{ nom, libelle, type, options, valeur, aide, min, max }]
+    formulaire(titre, champsDef, onSubmit, { bouton = 'Enregistrer', intro } = {}) {
+      const entrees = {};
+      const els = champsDef.map((c) => {
+        let el;
+        if (c.type === 'select') el = h('select', {}, c.options.map(([v, l]) => h('option', { value: v, selected: String(v) === String(c.valeur) }, l)));
+        else if (c.type === 'textarea') { el = h('textarea', { rows: 3, maxlength: c.max || 1000, placeholder: c.placeholder }); el.value = c.valeur || ''; }
+        else el = h('input', { type: c.type || 'text', value: c.valeur === undefined ? '' : c.valeur, min: c.min, max: c.max, step: c.step, placeholder: c.placeholder, autocomplete: 'off' });
+        entrees[c.nom] = el;
+        return champ(c.libelle, el, c.aide);
+      });
+      const btn = h('button', { class: 'btn primaire', type: 'submit' }, bouton);
+      const d = modale(titre, h('form', { novalidate: true, onsubmit: (ev) => {
+        ev.preventDefault();
+        agir(btn, async () => {
+          const v = {};
+          for (const c of champsDef) v[c.nom] = entrees[c.nom].value;
+          await onSubmit(v, d);
+        });
+      } }, intro && h('p', { class: 'aide' }, intro), els, btn));
+      return d;
+    },
+    // Confirmation obligatoire avant une action sensible
+    confirmer(titre, message, { bouton = 'Confirmer' } = {}) {
+      return new Promise((ok) => {
+        let rep = false;
+        const d = modale(titre, [h('p', {}, message), h('div', { class: 'actions' },
+          h('button', { class: 'btn primaire', type: 'button', onclick: () => { rep = true; d.close(); } }, bouton),
+          h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Annuler'))]);
+        d.addEventListener('close', () => ok(rep));
+      });
+    },
+    // Affiche un secret une seule fois (mot de passe provisoire…)
+    secretUnique(titre, valeur, aide) {
+      modale(titre, [h('p', { class: 'code-box' }, valeur),
+        h('div', { class: 'actions' }, h('button', { class: 'btn petit', type: 'button', onclick: () => navigator.clipboard && navigator.clipboard.writeText(valeur).then(() => toast('Copié.')) }, 'Copier')),
+        h('p', { class: 'aide' }, aide || 'Ce mot de passe ne sera plus affiché. Transmettez-le par un canal sûr ; son titulaire devra en choisir un nouveau à sa première connexion.')]);
+    },
+    // Téléchargement authentifié (PDF, export JSON)
+    async telecharger(chemin, { method = 'GET', body, nom = 'document' } = {}) {
+      const res = await R.appeler('/api/admin' + chemin, {
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+        body: body ? JSON.stringify(body) : undefined,
+      }, { delai: 60000 });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.erreur || 'Téléchargement impossible.'); }
+      const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+      const url = URL.createObjectURL(await res.blob());
+      const a = h('a', { href: url, download: m ? m[1] : nom });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    },
+    debounce: (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; },
+    statutDem(s) { return this.statutDemande[s] || [String(s || '—'), '']; },
+    statutDemande: { en_attente: ['À valider', ''], approuvee: ['Approuvée', 'ok'], refusee: ['Refusée', 'alerte'], brouillon: ['Brouillon', ''], annulee: ['Annulée', ''] },
+  };
+
+  const BQA = { h, api, toast, modale, agir, champ, remplacer, fcfa, nombre, dateFr, unite, state, ui, R, router, menus: MENUS, vues: VUES_PAR_ESPACE, partage: {} };
+  (window.BQA_MODULES || []).forEach((m) => m(BQA));
+  VUES_PAR_ESPACE.finance.compte = VUES.compte;
+  VUES_PAR_ESPACE.security.compte = VUES.compte;
 
   // ---------- Démarrage ----------
   async function demarrer() {
@@ -599,6 +740,9 @@
       state.token = null;
       return afficherConnexion();
     }
+    // Chaque rôle a son adresse : on y est renvoyé automatiquement (le serveur contrôle de toute façon chaque appel)
+    const cible = `/admin/${state.admin.espace}`;
+    if (location.pathname.replace(/\/+$/, '') !== cible) { location.replace(cible + location.hash); return; }
     afficherCoque();
     await router();
     ouvrirTempsReel();
