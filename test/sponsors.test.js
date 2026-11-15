@@ -11,7 +11,7 @@ const S = require('../server/lib/sponsors');
 const SECRET = process.env.JWT_SECRET;
 const tokProprio = jwt.sign({ sub: 3, typ: 'user' }, SECRET);
 const tokSecretaire = jwt.sign({ sub: 4, typ: 'user' }, SECRET);
-const tokAdmin = jwt.sign({ sub: 1, typ: 'admin' }, SECRET);
+const tokAdmin = jwt.sign({ sub: 1, typ: 'admin', sid: '3f0c7e0e-0000-4000-8000-000000000001' }, SECRET);
 const JETON = 'ab'.repeat(24);
 
 let serveur; let url;
@@ -32,7 +32,7 @@ function base(...extra) {
       const id = params[0];
       return { rows: [{ id, entreprise_id: 9, nom_complet: id === 3 ? 'Awa Koffi' : 'Secrétaire', email: 'u@a.fr', role: id === 3 ? 'proprietaire' : 'secretaire', actif: true, entreprise_statut: 'actif' }] };
     }
-    if (sql.includes('FROM admins_plateforme WHERE id')) return { rows: [{ id: 1, nom_complet: 'Admin', email: 'a@a.fr', actif: true }] };
+    if (sql.includes('JOIN admin_sessions')) return { rows: [{ id: 1, nom_complet: 'Admin', email: 'a@a.fr', actif: true, role: 'SUPER_ADMIN', sid: '3f0c7e0e-0000-4000-8000-000000000001' }] };
     if (sql.includes('FROM abonnements')) return { rows: [{ id: 1, date_fin: '2099-01-01' }] };
     for (const [motif, reponse] of regles) {
       if (typeof motif === 'string' ? sql.includes(motif) : motif.test(sql)) return typeof reponse === 'function' ? reponse(sql, params) : reponse;
