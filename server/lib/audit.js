@@ -1,83 +1,53 @@
 'use strict';
-const { env } = require('./env');
-const { HttpError } = require('./http');
-const jwt = require('./jwt');
+// Journal d'audit centralisé (ajout seulement : un déclencheur PostgreSQL refuse toute modification ou suppression).
 const db = require('./db');
 
-// Charge l'utilisateur depuis le jeton ; refuse les comptes désactivés.
-async function auth(ctx) {
-  const header = ctx.req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const payload = jwt.verify(token, env.jwtSecret);
-  if (!payload || payload.typ === 'admin') throw new HttpError(401, 'Session expirée. Reconnectez-vous.');
-  const { rows } = await db.query(
-    `SELECT u.id, u.entreprise_id, u.nom_complet, u.email, u.role, u.actif, u.mdp_temporaire, u.mdp_modifie_le,
-            (u.code_recuperation_hash IS NOT NULL) AS a_code_recuperation, e.statut AS entreprise_statut,
-            u.bloque_jusqua, u.sessions_revoquees_le
-       FROM utilisateurs u JOIN entreprises e ON e.id = u.entreprise_id
-      WHERE u.id = $1`,
-    [payload.sub],
-  );
-  const u = rows[0];
-  if (!u || !u.actif || u.entreprise_statut !== 'actif') throw new HttpError(401, 'Compte introuvable ou désactivé.');
-  // Blocage temporaire (administrateur de sécurité) et révocation de toutes les sessions antérieures
-  if (u.bloque_jusqua && new Date(u.bloque_jusqua) > new Date()) throw new HttpError(401, 'Compte temporairement bloqué pour raison de sécurité.');
-  if (u.sessions_revoquees_le && payload.iat < Math.floor(new Date(u.sessions_revoquees_le).getTime() / 1000)) {
-    throw new HttpError(401, 'Session fermée pour raison de sécurité. Reconnectez-vous.');
-  }
-  // Un changement ou une réinitialisation de mot de passe met fin à toutes les sessions plus anciennes
-  if (u.mdp_modifie_le && payload.iat < Math.floor(new Date(u.mdp_modifie_le).getTime() / 1000)) {
-    throw new HttpError(401, 'Votre mot de passe a changé. Reconnectez-vous.');
-  }
-  ctx.user = u;
+const SECRET = /(mot_de_passe|password|passwd|secret|token|jeton|hash|cle|key|code_recuperation|authorization)/i;
+const MAX_PROFONDEUR = 4;
+
+// Aucun secret ne doit jamais atterrir dans le journal : les valeurs sensibles sont masquées avant l'écriture
+function nettoyer(v, profondeur = 0) {
+  if (v === null || v === undefined) return v;
+  if (typeof v === 'string') return v.length > 500 ? v.slice(0, 500) + '…' : v;
+  if (typeof v !== 'object') return v;
+  if (profondeur >= MAX_PROFONDEUR) return '[…]';
+  if (Array.isArray(v)) return v.slice(0, 50).map((x) => nettoyer(x, profondeur + 1));
+  const out = {};
+  for (const [k, x] of Object.entries(v)) if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') out[k] = SECRET.test(k) ? '[masqué]' : nettoyer(x, profondeur + 1);
+  return out;
 }
 
-// Espaces d'administration : jeton dédié (typ = 'admin'), jamais interchangeable avec celui d'une entreprise.
-// Le jeton porte l'identifiant d'une session (sid) : révoquer la session coupe l'accès immédiatement.
-async function authAdmin(ctx) {
-  if (ctx.admin) return;
-  const header = ctx.req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const payload = jwt.verify(token, env.jwtSecret);
-  if (!payload || payload.typ !== 'admin' || !payload.sid) throw new HttpError(401, 'Session expirée. Reconnectez-vous.');
-  const { rows } = await db.query(
-    `SELECT a.id, a.nom_complet, a.email, a.actif, a.role, a.mdp_temporaire, a.bloque_jusqua, s.id AS sid, s.derniere_activite
-       FROM admins_plateforme a JOIN admin_sessions s ON s.admin_id = a.id
-      WHERE a.id = $1 AND s.id = $2 AND s.revoquee_le IS NULL AND s.expire_le > now()`,
-    [payload.sub, payload.sid],
-  );
-  const a = rows[0];
-  if (!a || !a.actif) throw new HttpError(401, 'Session expirée ou compte désactivé. Reconnectez-vous.');
-  if (a.bloque_jusqua && new Date(a.bloque_jusqua) > new Date()) throw new HttpError(401, 'Compte temporairement bloqué pour raison de sécurité.');
-  // Dernière activité : écrite au plus une fois par minute
-  if (!a.derniere_activite || Date.now() - new Date(a.derniere_activite).getTime() > 60000) {
-    await db.query('UPDATE admin_sessions SET derniere_activite = now() WHERE id = $1', [a.sid]);
+// Contexte de l'acteur : soit ctx.admin (requête authentifiée), soit un objet { id, email, role }
+function acteur(ctx) {
+  const a = (ctx && ctx.admin) || {};
+  return { id: a.id || null, email: a.email || null, role: a.role || null, ip: (ctx && ctx.ip) || null };
+}
+
+// Actions « sensibles » : elles déclenchent une alerte de sécurité visible de l'administrateur sécurité
+const SENSIBLES = new Set([
+  'admin.creer', 'admin.modifier', 'admin.suspendre', 'admin.reactiver', 'admin.mdp_reinitialise', 'admin.sessions_fermees',
+  'role.permissions_modifiees', 'parametres.modifies', 'agregateur.cles_modifiees', 'agregateur.active', 'agregateur.desactive',
+  'demande.approuvee', 'demande.refusee', 'abonnement.offert', 'abonnement.statut', 'entreprise.statut', 'acces.mdp_reinitialise', 'acces.code_regenere',
+  'sauvegarde.export', 'tarif.modifie',
+]);
+
+// Écrit une entrée. Ne fait jamais échouer l'opération métier : en cas d'erreur d'écriture, on le dit dans les logs.
+async function journaliser(ctx, action, { cible_type = null, cible_id = null, details = null, resultat = 'succes', q = null } = {}) {
+  const a = acteur(ctx);
+  if (ctx && typeof ctx === 'object') ctx.audite = true;
+  const sql = `INSERT INTO audit_journal (admin_id, admin_email, role, action, cible_type, cible_id, details, ip, resultat)
+               VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`;
+  const params = [a.id, a.email, a.role, action, cible_type, cible_id === null || cible_id === undefined ? null : String(cible_id), details ? JSON.stringify(nettoyer(details)) : null, a.ip, resultat];
+  try {
+    await (q ? q(sql, params) : db.query(sql, params));
+  } catch (e) {
+    console.error(`Journal d'audit : écriture impossible (${action}) :`, e.message);
+    if (q) throw e; // dans une transaction, l'audit fait partie de l'opération
+    return;
   }
-  ctx.admin = a;
-}
-
-const role = (...roles) => async (ctx) => {
-  if (!roles.includes(ctx.user.role)) throw new HttpError(403, 'Action réservée au propriétaire.');
-};
-
-async function activeSubscription(entrepriseId) {
-  const { rows } = await db.query(
-    `SELECT id, montant, to_char(date_debut, 'YYYY-MM-DD') AS date_debut, to_char(date_fin, 'YYYY-MM-DD') AS date_fin
-       FROM abonnements
-      WHERE entreprise_id = $1 AND statut = 'actif' AND date_fin >= CURRENT_DATE
-      ORDER BY date_fin DESC LIMIT 1`,
-    [entrepriseId],
-  );
-  return rows[0] || null;
-}
-
-// Bloque les fonctions métier tant que l'abonnement n'est pas actif.
-async function subscribed(ctx) {
-  const sub = await activeSubscription(ctx.user.entreprise_id);
-  if (!sub) {
-    throw new HttpError(402, 'Votre abonnement est expiré ou inactif. Renouvelez-le pour continuer.', { code: 'ABONNEMENT_REQUIS' });
+  if (resultat === 'succes' && SENSIBLES.has(action) && !q) {
+    try { await require('./securite').modificationSensible(ctx, action, cible_type, cible_id); } catch (e) { console.error('Alerte sécurité impossible :', e.message); }
   }
-  ctx.abonnement = sub;
 }
 
-module.exports = { auth, authAdmin, role, subscribed, activeSubscription };
+module.exports = { journaliser, nettoyer, SENSIBLES, acteur };
