@@ -11,6 +11,7 @@ const db = require('./lib/db');
 const { migrate } = require('./migrate');
 const { bootstrapFromEnv } = require('./lib/admins');
 const realtime = require('./lib/realtime');
+const relances = require('./lib/relances');
 
 const ASSETS = path.join(__dirname, '..', 'public', 'assets');
 const MIME = { '.woff': 'font/woff',
@@ -20,7 +21,7 @@ const MIME = { '.woff': 'font/woff',
 };
 
 const router = new Router();
-['auth', 'abonnement', 'catalogue', 'sante', 'ventes', 'credits', 'bilans', 'inventaire', 'equipe', 'profil', 'sponsors', 'factures', 'pwa', 'playstore', 'admin'].forEach((n) => require(`./routes/${n}`)(router));
+['auth', 'abonnement', 'catalogue', 'sante', 'ventes', 'credits', 'bilans', 'inventaire', 'equipe', 'profil', 'sponsors', 'factures', 'pwa', 'playstore', 'admin', 'admin-super', 'admin-finance', 'admin-finance-ops', 'admin-securite'].forEach((n) => require(`./routes/${n}`)(router));
 
 function serveAsset(req, res, pathname) {
   let rel;
@@ -143,6 +144,9 @@ async function handle(req, res) {
     let result;
     for (const h of route.handlers) result = await h(ctx);
 
+    if (ctx.admin && req.method !== 'GET' && req.method !== 'HEAD' && !ctx.audite) {
+      await require('./lib/audit').journaliser(ctx, `api.${req.method.toLowerCase()}`, { cible_type: 'route', cible_id: pathname.slice(0, 60) });
+    }
     if (ctx.raw) return send(res, ctx.raw.status, ctx.raw.body, ctx.raw.headers);
     return json(res, ctx.status, result === undefined ? { ok: true } : result);
   } catch (err) {
@@ -174,6 +178,7 @@ async function main() {
   server.maxHeadersCount = 100;
   if (!env.publicUrl) console.warn('Attention : PUBLIC_URL n\'est pas défini. Renseignez l\'adresse publique du site (https://…) : elle sert aux liens de factures et aux en-têtes de sécurité.');
   realtime.attach(server);
+  relances.demarrerPlanificateur();
   
   server.listen(env.port, '0.0.0.0', () => console.log(`Best-Quinca prêt sur le port ${env.port}`));
   
