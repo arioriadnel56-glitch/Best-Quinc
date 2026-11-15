@@ -1,232 +1,753 @@
-'use strict';
-const fs = require('node:fs');
-const path = require('node:path');
-const { env } = require('../lib/env');
-const db = require('../lib/db');
-const jwt = require('../lib/jwt');
-const { HttpError, str, int, email } = require('../lib/http');
-const { hashPassword, verifyPassword } = require('../lib/password');
-const { authAdmin } = require('../lib/auth');
-const { limit } = require('../lib/ratelimit');
-const { TZ } = require('../lib/tz');
-const settings = require('../lib/settings');
-const { MIN_PWD } = require('../lib/admins');
-const recovery = require('../lib/recovery');
-const realtime = require('../lib/realtime');
+(() => {
+  'use strict';
 
-const adminHtml = fs.readFileSync(path.join(__dirname, '..', 'templates', 'admin.html'), 'utf8');
-const DUMMY_HASH = `scrypt$${Buffer.alloc(16).toString('base64')}$${Buffer.alloc(64).toString('base64')}`;
-const SESSION_S = 12 * 3600;
+  const TOKEN_KEY = 'bq:admin:token';
+  const root = document.getElementById('root');
+  const state = { token: localStorage.getItem(TOKEN_KEY), admin: null };
 
-module.exports = function register(router) {
-  router.get('/admin', async (ctx) => {
-    ctx.raw = {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Robots-Tag': 'noindex, nofollow',
-      },
-      body: adminHtml,
+  const fcfa = (n) => new Intl.NumberFormat('fr-FR').format(Math.round(Number(n) || 0)) + ' F CFA';
+  // « 36 000 F CFA » : le nombre en grand, l'unité en petit
+  const unite = (t) => {
+    const m = /^(.*?)\s*(F CFA)$/.exec(String(t).replace(/\u202f/g, '\u00a0'));
+    return m ? [m[1], h('small', { class: 'unite' }, ` ${m[2]}`)] : [String(t)];
+  };
+  const nombre = (n) => new Intl.NumberFormat('fr-FR').format(Number(n) || 0);
+  const dateFr = (iso) => {
+    if (!iso) return '';
+    const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    let valeur;
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k === 'value') valeur = v;
+      else if (k === 'checked' || k === 'disabled' || k === 'selected') el[k] = v;
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+    const add = (c) => {
+      if (c === null || c === undefined || c === false) return;
+      if (Array.isArray(c)) c.forEach(add);
+      else el.append(c.nodeType ? c : document.createTextNode(String(c)));
     };
-  });
+    kids.forEach(add);
+    if (valeur !== undefined) el.value = valeur;
+    return el;
+  }
 
-  router.post('/api/admin/login', async (ctx) => {
-    const mail = email(ctx.body.email);
-    const pwd = str(ctx.body.mot_de_passe, 'mot de passe', { max: 200 });
-    await limit(`admin-login:${ctx.ip}|${mail}`, 8, 15 * 60 * 1000);
-    await limit(`admin-login-ip:${ctx.ip}`, 30, 15 * 60 * 1000);
-    await limit(`admin-login-cible:${mail}`, 20, 15 * 60 * 1000);
-    const { rows } = await db.query('SELECT id, mot_de_passe_hash, actif FROM admins_plateforme WHERE email = $1', [mail]);
-    const a = rows[0];
-    const ok = await verifyPassword(pwd, a ? a.mot_de_passe_hash : DUMMY_HASH);
-    if (!a || !ok || !a.actif) throw new HttpError(401, 'E-mail ou mot de passe incorrect.');
-    return { token: jwt.sign({ sub: a.id, typ: 'admin' }, env.jwtSecret, SESSION_S) };
-  });
+  // replaceChildren() écrirait « null » ou « false » pour un bloc vide : on les ignore
+  const remplacer = (el, ...enfants) => el.replaceChildren(...enfants.filter((c) => c !== null && c !== undefined && c !== false && c !== ''));
 
-  router.get('/api/admin/me', authAdmin, async (ctx) => ({
-    admin: { nom_complet: ctx.admin.nom_complet, email: ctx.admin.email },
-  }));
+  function toast(message, type = 'ok') {
+    const t = h('div', { class: `toast ${type}` }, message);
+    document.getElementById('toasts').append(t);
+    setTimeout(() => t.remove(), type === 'erreur' ? 6000 : 3500);
+  }
 
-  router.post('/api/admin/mot-de-passe', authAdmin, async (ctx) => {
-    const ancien = str(ctx.body.ancien, 'ancien mot de passe', { max: 200 });
-    const nouveau = str(ctx.body.nouveau, 'nouveau mot de passe', { min: MIN_PWD, max: 200 });
-    const { rows } = await db.query('SELECT mot_de_passe_hash FROM admins_plateforme WHERE id = $1', [ctx.admin.id]);
-    if (!(await verifyPassword(ancien, rows[0].mot_de_passe_hash))) throw new HttpError(400, 'Ancien mot de passe incorrect.');
-    await db.query('UPDATE admins_plateforme SET mot_de_passe_hash = $1 WHERE id = $2', [await hashPassword(nouveau), ctx.admin.id]);
-    return { ok: true };
-  });
+  const R = window.BQR; // appels au serveur et réveil à la demande (reveil.js)
+  const messageReseau = (kind) => (kind === 'reveil' ? 'Le serveur ne répond pas. Réessayez dans un instant.' : 'Pas de connexion à internet. Réessayez.');
 
-  // ---- Vue d'ensemble ----
-  router.get('/api/admin/stats', authAdmin, async () => {
-    const [ent, abo, rev, serie] = await Promise.all([
-      db.query(
-        `SELECT COUNT(*)::int AS total,
-                COUNT(*) FILTER (WHERE statut = 'actif')::int AS actives,
-                COUNT(*) FILTER (WHERE statut <> 'actif')::int AS suspendues,
-                COUNT(*) FILTER (WHERE (cree_le AT TIME ZONE $1) >= date_trunc('month', now() AT TIME ZONE $1))::int AS nouvelles_mois
-           FROM entreprises`,
-        [TZ],
-      ),
-      db.query(
-        `SELECT COUNT(DISTINCT entreprise_id)::int AS actifs,
-                COUNT(DISTINCT entreprise_id) FILTER (WHERE montant > 0)::int AS payants
-           FROM abonnements WHERE statut = 'actif' AND date_fin >= CURRENT_DATE`,
-      ),
-      db.query(
-        `SELECT COALESCE(SUM(montant) FILTER (WHERE (confirme_le AT TIME ZONE $1) >= date_trunc('month', now() AT TIME ZONE $1)), 0)::float8 AS mois,
-                COALESCE(SUM(montant), 0)::float8 AS total
-           FROM paiements WHERE statut = 'reussi'`,
-        [TZ],
-      ),
-      db.query(
-        `SELECT to_char(date_trunc('month', confirme_le AT TIME ZONE $1), 'YYYY-MM') AS mois, SUM(montant)::float8 AS total
-           FROM paiements WHERE statut = 'reussi' AND confirme_le >= now() - interval '6 months'
-          GROUP BY 1 ORDER BY 1`,
-        [TZ],
-      ),
-    ]);
-    return { entreprises: ent.rows[0], abonnes: abo.rows[0], revenus: rev.rows[0], serie: serie.rows };
-  });
-
-  // ---- Entreprises ----
-  router.get('/api/admin/entreprises', authAdmin, async (ctx) => {
-    const q = String(ctx.query.q || '').slice(0, 100).replace(/[\\%_]/g, '\\$&');
-    const { rows } = await db.query(
-      `SELECT e.id, e.nom, e.slug, e.statut, e.email, e.telephone,
-              to_char(e.cree_le AT TIME ZONE $1, 'YYYY-MM-DD') AS cree_le,
-              (SELECT COUNT(*) FROM utilisateurs u WHERE u.entreprise_id = e.id)::int AS nb_utilisateurs,
-              (SELECT COUNT(*) FROM ventes v WHERE v.entreprise_id = e.id)::int AS nb_ventes,
-              (SELECT to_char(MAX(a.date_fin), 'YYYY-MM-DD') FROM abonnements a
-                WHERE a.entreprise_id = e.id AND a.statut = 'actif' AND a.date_fin >= CURRENT_DATE) AS fin_abonnement
-         FROM entreprises e
-        WHERE ($2::text = '' OR e.nom ILIKE '%' || $2::text || '%' OR e.slug ILIKE '%' || $2::text || '%' OR e.email ILIKE '%' || $2::text || '%')
-        ORDER BY e.id DESC LIMIT 200`,
-      [TZ, q],
-    );
-    return rows;
-  });
-
-  router.put('/api/admin/entreprises/:id/statut', authAdmin, async (ctx) => {
-    const id = int(ctx.params.id, 'entreprise', { min: 1 });
-    const statut = str(ctx.body.statut, 'statut', { max: 20 });
-    if (!['actif', 'suspendu'].includes(statut)) throw new HttpError(400, 'Statut invalide.');
-    const r = await db.query('UPDATE entreprises SET statut = $1 WHERE id = $2', [statut, id]);
-    if (!r.rowCount) throw new HttpError(404, 'Entreprise introuvable.');
-    if (statut === 'suspendu') realtime.fermerEntreprise(id);
-    return { ok: true };
-  });
-
-  router.post('/api/admin/entreprises/:id/offrir', authAdmin, async (ctx) => {
-    const id = int(ctx.params.id, 'entreprise', { min: 1 });
-    const jours = int(ctx.body.jours, 'nombre de jours', { min: 1, max: 366 });
-    const fin = await db.tx(async (q) => {
-      const e = await q('SELECT id FROM entreprises WHERE id = $1', [id]);
-      if (!e.rows.length) throw new HttpError(404, 'Entreprise introuvable.');
-      const r = await q(
-        `INSERT INTO abonnements (entreprise_id, montant, statut, date_debut, date_fin)
-         SELECT $1::int, 0, 'actif', d.debut, d.debut + $2::int
-           FROM (SELECT GREATEST(CURRENT_DATE, COALESCE(MAX(date_fin), CURRENT_DATE)) AS debut
-                   FROM abonnements WHERE entreprise_id = $1::int AND statut = 'actif') d
-         RETURNING to_char(date_fin, 'YYYY-MM-DD') AS date_fin`,
-        [id, jours],
-      );
-      return r.rows[0].date_fin;
-    });
-    realtime.publier(id, 'abonnement.change');
-    return { date_fin: fin };
-  });
-
-  // ---- Récupération d'accès d'une entreprise ----
-  router.get('/api/admin/entreprises/:id/utilisateurs', authAdmin, async (ctx) => {
-    const id = int(ctx.params.id, 'entreprise', { min: 1 });
-    const { rows } = await db.query(
-      `SELECT id, nom_complet, email, role, actif, (code_recuperation_hash IS NOT NULL) AS a_code_recuperation
-         FROM utilisateurs WHERE entreprise_id = $1 ORDER BY role, nom_complet`,
-      [id],
-    );
-    return rows;
-  });
-
-  router.post('/api/admin/entreprises/:id/utilisateurs/:uid/reinitialiser', authAdmin, async (ctx) => {
-    const id = int(ctx.params.id, 'entreprise', { min: 1 });
-    const uid = int(ctx.params.uid, 'utilisateur', { min: 1 });
-    const temporaire = recovery.genererTemporaire();
-    const r = await db.query(
-      `UPDATE utilisateurs SET mot_de_passe_hash = $1, mdp_modifie_le = now(), mdp_temporaire = true, actif = true
-        WHERE id = $2 AND entreprise_id = $3 RETURNING email`,
-      [await hashPassword(temporaire), uid, id],
-    );
-    if (!r.rows.length) throw new HttpError(404, 'Utilisateur introuvable dans cette entreprise.');
-    realtime.fermerUtilisateur(uid);
-    console.log(`[admin ${ctx.admin.email}] mot de passe réinitialisé : utilisateur ${uid}, entreprise ${id}`);
-    return { email: r.rows[0].email, mot_de_passe_temporaire: temporaire };
-  });
-
-  router.post('/api/admin/entreprises/:id/utilisateurs/:uid/code-recuperation', authAdmin, async (ctx) => {
-    const id = int(ctx.params.id, 'entreprise', { min: 1 });
-    const uid = int(ctx.params.uid, 'utilisateur', { min: 1 });
-    const code = recovery.genererCode();
-    const r = await db.query(
-      `UPDATE utilisateurs SET code_recuperation_hash = $1 WHERE id = $2 AND entreprise_id = $3 RETURNING email`,
-      [recovery.empreinte(code), uid, id],
-    );
-    if (!r.rows.length) throw new HttpError(404, 'Utilisateur introuvable dans cette entreprise.');
-    console.log(`[admin ${ctx.admin.email}] code de récupération régénéré : utilisateur ${uid}, entreprise ${id}`);
-    return { email: r.rows[0].email, code_recuperation: code };
-  });
-
-  // ---- Paiements ----
-  router.get('/api/admin/paiements', authAdmin, async (ctx) => {
-    const statut = ['reussi', 'en_attente', 'echoue'].includes(ctx.query.statut) ? ctx.query.statut : null;
-    const { rows } = await db.query(
-      `SELECT p.id, p.agregateur, p.plan, p.reference_transaction, p.montant, p.statut, e.nom AS entreprise, e.slug,
-              to_char(p.cree_le AT TIME ZONE $1, 'YYYY-MM-DD HH24:MI') AS cree_le
-         FROM paiements p JOIN entreprises e ON e.id = p.entreprise_id
-        WHERE ($2::text IS NULL OR p.statut = $2::text)
-        ORDER BY p.id DESC LIMIT 200`,
-      [TZ, statut],
-    );
-    return rows;
-  });
-
-  router.post('/api/admin/entreprises/:id/tableau-remise', authAdmin, async (ctx) => {
-    const id = int(ctx.params.id, 'entreprise', { min: 1 });
-    const note = str(ctx.body.note, 'note', { optional: true, max: 255 });
-    const r = await db.tx(async (q) => {
-      const e = await q('UPDATE entreprises SET tableau_depuis = now() WHERE id = $1 RETURNING id', [id]);
-      if (!e.rows.length) throw new HttpError(404, 'Entreprise introuvable.');
-      await q('INSERT INTO tableau_remises (entreprise_id, admin_id, note) VALUES ($1, $2, $3)', [id, ctx.admin.id, note]);
-      return e.rows[0];
-    });
-    realtime.publier(r.id, 'tableau.remis', { par: 'admin' });
-    ctx.status = 201;
-    return { ok: true };
-  });
-
-  // ---- Paramètres ----
-  router.get('/api/admin/parametres', authAdmin, async () => ({
-    parametres: await settings.describe(),
-    webhook_kkiapay: '/api/webhooks/kkiapay',
-    webhook_fedapay: '/api/webhooks/fedapay',
-  }));
-
-  router.put('/api/admin/parametres', authAdmin, async (ctx) => {
-    const valeurs = ctx.body.valeurs && typeof ctx.body.valeurs === 'object' && !Array.isArray(ctx.body.valeurs) ? ctx.body.valeurs : {};
-    const effacer = Array.isArray(ctx.body.effacer) ? ctx.body.effacer : [];
-    const aEcrire = {};
-    for (const [k, v] of Object.entries(valeurs)) {
-      if (!settings.DEFS[k]) throw new HttpError(400, `Paramètre inconnu : ${k}.`);
-      if (settings.DEFS[k].secret && (v === '' || v === null || v === undefined)) continue;
-      aEcrire[k] = settings.normaliser(k, v);
+  async function api(path, { method = 'GET', body } = {}) {
+    let res;
+    const envoyer = () => R.appeler('/api/admin' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    }, { delai: 20000 });
+    try {
+      // Une écriture n'est jamais rejouée à l'aveugle : on s'assure d'abord que le serveur répond. Une lecture peut être reprise après le réveil.
+      if (method !== 'GET' && !(await R.garantir({ avecEcran: true }))) throw new R.ErreurReseau('reveil', 'Le serveur ne répond pas.');
+      try { res = await envoyer(); } catch (e) {
+        if (method !== 'GET' || e.kind !== 'reveil' || !(await R.attendreServeur({ avecEcran: true }))) throw e;
+        res = await envoyer();
+      }
+    } catch (e) {
+      throw new Error(messageReseau(e && e.kind));
     }
-    for (const k of effacer) {
-      if (!settings.DEFS[k]) throw new HttpError(400, `Paramètre inconnu : ${k}.`);
-      if (k in aEcrire) throw new HttpError(400, 'Impossible de modifier et d\'effacer le même paramètre.');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401 && state.token) deconnecter();
+      const err = new Error(data.erreur || 'Une erreur est survenue.');
+      err.status = res.status;
+      throw err;
     }
-    if (!Object.keys(aEcrire).length && !effacer.length) throw new HttpError(400, 'Aucune modification à enregistrer.');
-    await settings.save(aEcrire, effacer);
-    console.log(`[admin ${ctx.admin.email}] paramètres modifiés : ${[...Object.keys(aEcrire), ...effacer.map((k) => `${k} (effacé)`)].join(', ')}`);
-    return { parametres: await settings.describe() };
-  });
-};
+    return data;
+  }
+
+  async function agir(btn, fn) {
+    if (btn) btn.disabled = true;
+    try { return await fn(); } catch (e) { toast(e.message, 'erreur'); } finally { if (btn) btn.disabled = false; }
+  }
+
+  function modale(titre, contenu, { large = false } = {}) {
+    const d = h('dialog', { class: 'modale' + (large ? ' large' : '') },
+      h('div', { class: 'modale-tete' }, h('h2', {}, titre),
+        h('button', { class: 'btn-icone', type: 'button', 'aria-label': 'Fermer', onclick: () => d.close() }, '×')),
+      h('div', { class: 'modale-corps' }, contenu));
+    d.addEventListener('close', () => d.remove());
+    document.body.append(d);
+    d.showModal();
+    return d;
+  }
+
+  const champ = (libelle, input, aide) => h('label', { class: 'champ' }, h('span', {}, libelle), input, aide && h('small', {}, aide));
+
+  // Temps réel : un paiement ou une inscription apparaît sans recharger la page
+  let tempsReel = null;
+  let minuteurMaj = null;
+  let minuteurNotif = null;
+  function ouvrirTempsReel() {
+    if (tempsReel || !window.BQWS) return;
+    tempsReel = window.BQWS.connecter({
+      peutOuvrir: () => document.visibilityState === 'visible',
+      jeton: () => state.token,
+      surEtat: () => {},
+      surEvenement: (ev) => {
+        if (ev.type === 'paiement.reussi') toast(`Paiement reçu : ${fcfa(ev.montant)}`);
+        else if (ev.type === 'entreprise.nouvelle') toast(`Nouvelle entreprise : ${ev.nom}`);
+        else if (ev.type === 'commande.reassort') toast(`Commande de réassort : ${ev.entreprise} → ${ev.sponsor}`);
+        else return;
+        const vue = location.hash.replace(/^#\/?/, '') || 'tableau';
+        if (['tableau', 'paiements'].includes(vue)) {
+          clearTimeout(minuteurMaj);
+          minuteurMaj = setTimeout(router, 600);
+        }
+      },
+    });
+  }
+
+  function deconnecter() {
+    if (state.token) {
+      // Fermeture de la session côté serveur (sans attendre : la déconnexion locale est immédiate)
+      R.appeler('/api/admin/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` }, body: '{}' }, { delai: 5000 }).catch(() => {});
+    }
+    clearInterval(minuteurNotif);
+    if (tempsReel) { tempsReel.fermer(); tempsReel = null; }
+    localStorage.removeItem(TOKEN_KEY);
+    state.token = null;
+    state.admin = null;
+    afficherConnexion();
+  }
+
+  // ---------- Connexion ----------
+  function afficherConnexion() {
+    const erreur = h('p', { class: 'erreur', role: 'alert' });
+    const mail = h('input', { type: 'email', required: true, autocomplete: 'username' });
+    const pwd = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
+    const btn = h('button', { class: 'btn primaire', type: 'submit' }, 'Se connecter');
+    root.replaceChildren(h('main', { class: 'centre' },
+      h('form', { class: 'carte connexion', novalidate: true, onsubmit: async (e) => {
+        e.preventDefault();
+        erreur.textContent = '';
+        btn.disabled = true;
+        try {
+          const r = await api('/login', { method: 'POST', body: { email: mail.value, mot_de_passe: pwd.value } });
+          state.token = r.token;
+          localStorage.setItem(TOKEN_KEY, r.token);
+          // Le serveur indique l'espace du rôle : /admin/super, /admin/finance ou /admin/security
+          if (r.redirection && location.pathname.replace(/\/+$/, '') !== r.redirection) { location.assign(r.redirection); return; }
+          await demarrer();
+        } catch (err) { erreur.textContent = err.message; btn.disabled = false; }
+      } },
+        h('img', { class: 'logo-connexion', src: '/assets/marque/best-quinca.png', alt: 'Best-Quinca Hardware' }),
+        h('h1', {}, 'Administration'),
+        h('p', { class: 'aide' }, 'Accès réservé aux administrateurs de la plateforme Best-Quinca.'),
+        champ('Adresse e-mail', mail), champ('Mot de passe', pwd), erreur, btn)));
+  }
+
+  // ---------- Coque : menu latéral propre à chaque rôle ----------
+  const VUES = {};
+  const VUES_PAR_ESPACE = { super: VUES, finance: {}, security: {} };
+  // Les chaînes sont des titres de groupe ; les paires [identifiant, libellé] sont des pages
+  const MENUS = {
+    super: [
+      'Gouvernance', ['tableau', 'Vue d\'ensemble'], ['demandes', 'Demandes à valider'], ['admins', 'Administrateurs'], ['roles', 'Rôles et permissions'], ['activite', 'Activité'],
+      'Plateforme', ['entreprises', 'Entreprises'], ['abonnements', 'Abonnements'], ['finances', 'Finances'], ['paiements', 'Paiements'], ['securite', 'Sécurité'], ['sponsors', 'Sponsors'],
+      'Configuration', ['parametres', 'Paramètres'], ['systeme', 'Système et sauvegardes'], ['compte', 'Mon compte'],
+    ],
+    finance: [], security: [],
+  };
+  const premierEcran = (espace) => (MENUS[espace].find((m) => typeof m !== 'string') || ['compte'])[0];
+
+  function afficherCoque() {
+    const espace = state.admin.espace;
+    const liens = MENUS[espace].map((m) => (typeof m === 'string'
+      ? h('div', { class: 'groupe' }, m)
+      : h('a', { href: `#/${m[0]}`, 'data-route': m[0] }, m[1])));
+    root.replaceChildren(
+      h('header', { class: 'admin-top' }, h('strong', {}, h('img', { class: 'logo-admin', src: '/assets/marque/best-quinca-clair.png', alt: 'Best-Quinca Hardware' }), 'Administration'),
+        h('span', {}, state.admin.nom_complet),
+        h('button', { class: 'btn petit cloche', type: 'button', onclick: ouvrirNotifications, 'aria-label': 'Notifications' }, 'Notifications', h('span', { class: 'compteur', id: 'compteur', hidden: true })),
+        h('button', { class: 'btn petit', type: 'button', onclick: deconnecter }, 'Se déconnecter')),
+      h('div', { class: 'admin-corps' },
+        h('nav', { class: 'admin-menu', 'aria-label': 'Sections' }, h('span', { class: 'role-badge' }, state.admin.role_libelle), liens),
+        h('main', { class: 'admin-vue', id: 'vue', tabindex: '-1' })));
+    chargerNotifications();
+    clearInterval(minuteurNotif);
+    minuteurNotif = setInterval(() => { if (document.visibilityState === 'visible') chargerNotifications(); }, 60000);
+  }
+
+  let notifications = { total: 0, items: [] };
+  async function chargerNotifications() {
+    try { notifications = await api('/notifications'); } catch { return; }
+    const c = document.getElementById('compteur');
+    if (c) { c.textContent = notifications.total > 99 ? '99+' : String(notifications.total); c.hidden = !notifications.total; }
+  }
+  function ouvrirNotifications() {
+    const d = modale('Notifications', notifications.items.length
+      ? h('ul', { class: 'liste' }, notifications.items.map((i) => h('li', {}, h('span', {}, i.texte), h('a', { class: 'btn petit', href: i.lien, onclick: () => d.close() }, 'Ouvrir'))))
+      : h('p', { class: 'aide' }, 'Rien à traiter pour le moment.'));
+  }
+
+  async function router() {
+    const vue = document.getElementById('vue');
+    if (!vue || !state.admin) return;
+    const espace = state.admin.espace;
+    const vues = VUES_PAR_ESPACE[espace] || {};
+    let nom = location.hash.replace(/^#\/?/, '') || premierEcran(espace);
+    // Mot de passe provisoire : seul « Mon compte » est accessible (le serveur l'impose aussi)
+    if (state.admin.mdp_temporaire) nom = 'compte';
+    if (!vues[nom]) nom = premierEcran(espace);
+    document.querySelectorAll('.admin-menu a').forEach((a) => a.classList.toggle('actif', a.dataset.route === nom));
+    remplacer(vue, h('p', { class: 'chargement' }, 'Chargement…'));
+    try { await vues[nom](vue); } catch (e) {
+      if (e.status === 401) return;
+      remplacer(vue, h('section', { class: 'carte' }, h('h1', {}, "Impossible d'afficher cette page"), h('p', {}, e.message),
+        h('button', { class: 'btn', type: 'button', onclick: router }, 'Réessayer')));
+    }
+  }
+
+  // ---------- Vue d'ensemble ----------
+  VUES.tableau = async (vue) => {
+    const [d, g] = await Promise.all([api('/stats'), api('/super/dashboard').catch(() => null)]);
+    const stat = (t, v, detail, alerte) => h('div', { class: 'stat' + (alerte ? ' alerte' : '') },
+      h('span', { class: 'stat-titre' }, t), h('strong', { class: 'stat-valeur' }, typeof v === 'string' ? unite(v) : v), detail && h('span', { class: 'stat-detail' }, detail));
+    const max = Math.max(1, ...d.serie.map((s) => s.total));
+    remplacer(vue, h('h1', {}, "Vue d'ensemble"),
+      h('div', { class: 'stats egales' },
+        stat('Entreprises', nombre(d.entreprises.total), `${nombre(d.entreprises.nouvelles_mois)} nouvelle(s) ce mois-ci`),
+        stat('Abonnements actifs', nombre(d.abonnes.actifs), `dont ${nombre(d.abonnes.payants)} payant(s)`),
+        stat('Revenus du mois', fcfa(d.revenus.mois), `${fcfa(d.revenus.total)} au total`),
+        stat('Entreprises suspendues', nombre(d.entreprises.suspendues), null, d.entreprises.suspendues > 0)),
+      g && h('div', { class: 'stats egales' },
+        stat('Demandes à valider', nombre(g.demandes_en_attente), h('a', { href: '#/demandes' }, 'Ouvrir'), g.demandes_en_attente > 0),
+        stat('Alertes de sécurité', nombre(g.alertes.n), `dont ${nombre(g.alertes.graves)} grave(s)`, g.alertes.graves > 0),
+        stat('Administrateurs actifs', nombre(g.admins.actifs), `sur ${nombre(g.admins.total)} compte(s)`),
+        stat('Dépenses du mois', fcfa(g.depenses_mois), 'hébergement, domaines, services')),
+      h('section', { class: 'carte' }, h('h2', {}, 'Revenus des 6 derniers mois'),
+        d.serie.length
+          ? h('div', { class: 'barres' }, d.serie.map((s) => h('div', { class: 'barre', title: `${s.mois} : ${fcfa(s.total)}` },
+            h('span', { class: 'barre-fut', style: `height:${Math.round((s.total / max) * 100)}%` }), h('span', { class: 'barre-lib' }, s.mois.slice(5) + '/' + s.mois.slice(2, 4)))))
+          : h('p', { class: 'aide' }, 'Aucun paiement enregistré pour le moment.')));
+  };
+
+  // ---------- Entreprises ----------
+  VUES.entreprises = async (vue) => {
+    const corps = h('tbody');
+    let recherche = '';
+    let timer;
+
+    async function charger() {
+      const liste = await api(`/entreprises?q=${encodeURIComponent(recherche)}`);
+      corps.replaceChildren(...(liste.length ? liste.map((e) => h('tr', { class: e.statut === 'actif' ? '' : 'archive' },
+        h('td', {}, h('strong', {}, e.nom), h('small', { class: 'bloc-pt' }, h('a', { href: `/app/${e.slug}/`, target: '_blank', rel: 'noopener' }, e.slug)), h('small', { class: 'bloc-pt' }, `Créée le ${dateFr(e.cree_le)}`)),
+        h('td', {}, e.email || '—', e.telephone && h('small', { class: 'bloc-pt' }, e.telephone)),
+        h('td', { class: 'num' }, nombre(e.nb_utilisateurs)),
+        h('td', { class: 'num' }, nombre(e.nb_ventes)),
+        h('td', {}, e.fin_abonnement ? h('span', { class: 'puce ok' }, `jusqu'au ${dateFr(e.fin_abonnement)}`) : h('span', { class: 'puce alerte' }, 'Inactif')),
+        h('td', {}, e.statut === 'actif' ? h('span', { class: 'puce ok' }, 'Active') : h('span', { class: 'puce alerte' }, 'Suspendue')),
+        h('td', { class: 'actions-ligne' },
+          h('button', { class: 'btn petit', type: 'button', onclick: () => acces(e) }, 'Accès'),
+          h('button', { class: 'btn petit', type: 'button', onclick: () => offrir(e) }, 'Offrir des jours'),
+          h('button', { class: 'btn petit', type: 'button', onclick: () => remiseZero(e) }, 'Remettre le tableau à zéro'),
+          h('button', { class: 'btn petit', type: 'button', onclick: (ev) => agir(ev.currentTarget, async () => {
+            const suspendre = e.statut === 'actif';
+            if (suspendre && !confirm(`Suspendre « ${e.nom} » ? Ses utilisateurs ne pourront plus se connecter ni ouvrir l'application.`)) return;
+            await api(`/entreprises/${e.id}/statut`, { method: 'PUT', body: { statut: suspendre ? 'suspendu' : 'actif' } });
+            toast(suspendre ? 'Entreprise suspendue.' : 'Entreprise réactivée.');
+            await charger();
+          }) }, e.statut === 'actif' ? 'Suspendre' : 'Réactiver'))))
+        : [h('tr', {}, h('td', { colspan: 7, class: 'aide' }, 'Aucune entreprise.'))]));
+    }
+
+    // Récupération d'accès : mot de passe provisoire ou nouveau code, affichés une seule fois
+    async function acces(e) {
+      const utilisateurs = await api(`/entreprises/${e.id}/utilisateurs`).catch((err) => { toast(err.message, 'erreur'); return null; });
+      if (!utilisateurs) return;
+      const resultat = h('div', { 'aria-live': 'polite' });
+      const montrer = (titre, valeur, email, aide) => resultat.replaceChildren(h('div', { class: 'resultat' },
+        h('p', {}, h('strong', {}, titre), ` pour ${email}`),
+        h('p', { class: 'code-box' }, valeur),
+        h('div', { class: 'actions' }, h('button', { class: 'btn petit', type: 'button', onclick: () => navigator.clipboard && navigator.clipboard.writeText(valeur).then(() => toast('Copié.')) }, 'Copier')),
+        h('p', { class: 'aide' }, aide)));
+      const lignes = utilisateurs.map((u) => h('li', { class: u.actif ? '' : 'archive' },
+        h('span', {}, h('strong', {}, u.nom_complet), h('small', { class: 'bloc-pt' }, `${u.email} · ${u.role === 'proprietaire' ? 'Propriétaire' : 'Secrétaire'}${u.actif ? '' : ' · désactivé'}`)),
+        h('span', { class: 'actions' },
+          h('button', { class: 'btn petit', type: 'button', onclick: (ev) => agir(ev.currentTarget, async () => {
+            if (!confirm(`Réinitialiser le mot de passe de ${u.nom_complet} ?\nVérifiez d'abord son identité (appel, message depuis le numéro de l'entreprise…). Ses sessions en cours seront fermées.`)) return;
+            const r = await api(`/entreprises/${e.id}/utilisateurs/${u.id}/reinitialiser`, { method: 'POST' });
+            montrer('Mot de passe provisoire', r.mot_de_passe_temporaire, r.email, 'Transmettez-le à son titulaire par un canal sûr. Il sera obligé d\'en choisir un nouveau à sa première connexion. Ce mot de passe ne sera plus affiché.');
+          }) }, 'Nouveau mot de passe'),
+          u.role === 'proprietaire' && h('button', { class: 'btn petit', type: 'button', onclick: (ev) => agir(ev.currentTarget, async () => {
+            if (!confirm(`Générer un nouveau code de récupération pour ${u.nom_complet} ? L'ancien code ne fonctionnera plus.`)) return;
+            const r = await api(`/entreprises/${e.id}/utilisateurs/${u.id}/code-recuperation`, { method: 'POST' });
+            montrer('Code de récupération', r.code_recuperation, r.email, 'À remettre au propriétaire : il pourra choisir lui-même un nouveau mot de passe (écran de connexion → « Mot de passe oublié »). Ce code ne sera plus affiché.');
+          }) }, 'Nouveau code'))));
+      modale(`Accès — ${e.nom}`, [
+        h('p', { class: 'aide' }, `Contact de l'entreprise : ${e.email || 'aucun e-mail'}${e.telephone ? ' · ' + e.telephone : ''}`),
+        h('ul', { class: 'liste' }, lignes), resultat]);
+    }
+
+    // Fin d'inventaire : seules les statistiques du tableau de bord repartent de zéro (ventes, crédits et stock restent intacts)
+    function remiseZero(e) {
+      const note = h('input', { maxlength: 255, placeholder: 'Ex. : inventaire de fin d\'octobre' });
+      const btn = h('button', { class: 'btn primaire', type: 'submit' }, 'Remettre à zéro');
+      const d = modale(`Tableau de bord — ${e.nom}`, h('form', { novalidate: true, onsubmit: (ev) => {
+        ev.preventDefault();
+        agir(btn, async () => {
+          await api(`/entreprises/${e.id}/tableau-remise`, { method: 'POST', body: { note: note.value } });
+          d.close();
+          toast(`Tableau de bord de « ${e.nom} » remis à zéro.`);
+        });
+      } },
+      h('p', {}, 'Les chiffres du tableau de bord (ventes du jour et du mois, 7 derniers jours, produits les plus vendus, remboursements du mois) repartent de zéro maintenant.'),
+      h('p', { class: 'aide' }, 'Aucune vente n\'est supprimée : l\'historique, les crédits clients et le stock restent intacts.'),
+      champ('Note (facultatif)', note), btn));
+    }
+
+    function offrir(e) {
+      const jours = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: 366, step: 1, value: 30, required: true });
+      const btn = h('button', { class: 'btn primaire', type: 'submit' }, 'Offrir');
+      const d = modale(`Offrir des jours à ${e.nom}`, h('form', { novalidate: true, onsubmit: (ev) => {
+        ev.preventDefault();
+        agir(btn, async () => {
+          const r = await api(`/entreprises/${e.id}/offrir`, { method: 'POST', body: { jours: Number(jours.value) } });
+          d.close();
+          toast(`Abonnement prolongé jusqu'au ${dateFr(r.date_fin)}.`);
+          await charger();
+        });
+      } }, champ('Nombre de jours', jours, "Les jours s'ajoutent à la fin de l'abonnement en cours."), btn));
+    }
+
+    remplacer(vue, h('h1', {}, 'Entreprises'),
+      h('div', { class: 'filtres' }, h('input', { type: 'search', placeholder: 'Chercher par nom, identifiant ou e-mail', 'aria-label': 'Chercher',
+        oninput: (ev) => { recherche = ev.target.value; clearTimeout(timer); timer = setTimeout(charger, 250); } })),
+      h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+        h('thead', {}, h('tr', {}, ['Entreprise', 'Contact', 'Utilisateurs', 'Ventes', 'Abonnement', 'Statut', ''].map((t, i) => h('th', { class: i === 2 || i === 3 ? 'num' : '' }, t)))), corps)));
+    await charger();
+  };
+
+  // ---------- Paiements ----------
+  VUES.paiements = async (vue) => {
+    const corps = h('tbody');
+    const STATUTS = { reussi: ['Réussi', 'ok'], en_attente: ['Non finalisé', ''], echoue: ['Échoué', 'alerte'] };
+    const filtre = h('select', { 'aria-label': 'Filtrer par état', onchange: charger },
+      h('option', { value: '' }, 'Tous les états'), h('option', { value: 'reussi' }, 'Réussis'), h('option', { value: 'en_attente' }, 'Non finalisés'), h('option', { value: 'echoue' }, 'Échoués'));
+
+    async function charger() {
+      const liste = await api(`/paiements?statut=${encodeURIComponent(filtre.value)}`);
+      corps.replaceChildren(...(liste.length ? liste.map((p) => {
+        const [lib, cls] = STATUTS[p.statut] || [p.statut, ''];
+        return h('tr', {}, h('td', {}, p.cree_le), h('td', {}, p.entreprise), h('td', {}, p.plan === 'annuel' ? 'Annuel' : 'Mensuel'), h('td', {}, p.agregateur === 'fedapay' ? 'FedaPay' : p.agregateur === 'kkiapay' ? 'KkiaPay' : p.agregateur),
+          h('td', {}, p.reference_transaction ? h('span', { class: 'mono' }, p.reference_transaction) : '—'),
+          h('td', { class: 'num' }, fcfa(p.montant)), h('td', {}, h('span', { class: `puce ${cls}` }, lib)));
+      }) : [h('tr', {}, h('td', { colspan: 7, class: 'aide' }, 'Aucun paiement.'))]));
+    }
+    remplacer(vue, h('h1', {}, 'Paiements'), h('div', { class: 'filtres' }, filtre),
+      h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+        h('thead', {}, h('tr', {}, ['Date', 'Entreprise', 'Formule', 'Moyen', 'Transaction', 'Montant', 'État'].map((t, i) => h('th', { class: i === 5 ? 'num' : '' }, t)))), corps)),
+      h('p', { class: 'aide' }, 'Les 200 derniers paiements. « Non finalisé » : le client a ouvert le paiement sans le terminer.'));
+    await charger();
+  };
+
+  // ---------- Paramètres ----------
+  const SOURCES = { admin: ['Enregistrée ici', 'ok'], env: ['Valeur du fichier .env / par défaut', ''], null: ['Non définie', 'alerte'] };
+
+  // ---------- Sponsors ----------
+  async function logoEnBase64(fichier) {
+    if (!/^image\/(png|jpeg|webp)$/.test(fichier.type)) throw new Error('Choisissez une image PNG, JPEG ou WebP.');
+    const url = URL.createObjectURL(fichier);
+    const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error('Image illisible.')); i.src = url; });
+    URL.revokeObjectURL(url);
+    const r = Math.min(1, 512 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * r)); c.height = Math.max(1, Math.round(img.naturalHeight * r));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const data = c.toDataURL('image/png');
+    if (data.length * 0.75 > 280 * 1024) throw new Error('Ce logo est trop détaillé. Utilisez une version plus simple.');
+    return data;
+  }
+
+  VUES.sponsors = async (vue) => {
+    const corps = h('tbody');
+
+    async function charger() {
+      const liste = await api('/sponsors');
+      corps.replaceChildren(...(liste.length ? liste.map(ligne) : [h('tr', {}, h('td', { colspan: 6, class: 'aide' }, 'Aucun partenaire. Ajoutez-en un après accord écrit de la marque ou du distributeur.'))]));
+    }
+
+    function ligne(s) {
+      const periode = s.debut || s.fin ? `${s.debut ? dateFr(s.debut) : '…'} → ${s.fin ? dateFr(s.fin) : '…'}` : 'Sans limite';
+      return h('tr', {},
+        h('td', {}, s.a_logo && h('img', { class: 'sponsor-logo', src: `/partenaires/${s.id}/logo?v=${s.logo_v || 0}`, alt: '' }), h('strong', { class: 'bloc-pt' }, s.nom),
+          s.telephone_commande ? h('small', { class: 'bloc-pt' }, `Commandes : +${s.telephone_commande}`) : h('small', { class: 'bloc-pt bas' }, 'Pas de numéro de commande')),
+        h('td', {}, periode),
+        h('td', {}, h('span', { class: `puce ${s.statut === 'actif' ? 'ok' : 'alerte'}` }, s.statut === 'actif' ? 'Actif' : 'Suspendu')),
+        h('td', { class: 'num' }, `${nombre(s.nb_boutiques)} boutique(s) · ${nombre(s.nb_offres)} offre(s)`),
+        h('td', { class: 'num' }, nombre(s.nb_commandes)),
+        h('td', {}, h('div', { class: 'actions-ligne' },
+          h('button', { class: 'btn petit', type: 'button', onclick: () => formulaire(s) }, 'Modifier'),
+          h('button', { class: 'btn petit', type: 'button', onclick: () => offres(s) }, 'Offres'),
+          h('button', { class: 'btn petit', type: 'button', onclick: () => commandes(s) }, 'Commandes'),
+          h('button', { class: 'btn petit', type: 'button', onclick: () => rapport(s) }, 'Rapport'))));
+    }
+
+    function formulaire(s) {
+      const nouveau = !s;
+      const f = {
+        nom: h('input', { required: true, maxlength: 120, value: s ? s.nom : '' }),
+        description: h('textarea', { rows: 3, maxlength: 500 }),
+        site: h('input', { maxlength: 150, value: s && s.site_web ? s.site_web : '', placeholder: 'www.marque.com', autocapitalize: 'none' }),
+        tel: h('input', { type: 'tel', maxlength: 30, value: s && s.telephone_commande ? s.telephone_commande : '', placeholder: '22997000000' }),
+        debut: h('input', { type: 'date', value: s && s.debut ? s.debut : '' }),
+        fin: h('input', { type: 'date', value: s && s.fin ? s.fin : '' }),
+        statut: h('select', { value: s ? s.statut : 'actif' }, h('option', { value: 'actif' }, 'Actif'), h('option', { value: 'suspendu' }, 'Suspendu')),
+      };
+      f.description.value = s && s.description ? s.description : '';
+      const fichier = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true, 'aria-label': 'Choisir un logo' });
+      fichier.addEventListener('change', () => agir(null, async () => {
+        const fic = fichier.files[0]; fichier.value = '';
+        if (!fic) return;
+        await api(`/sponsors/${s.id}/logo`, { method: 'PUT', body: { logo: await logoEnBase64(fic) } });
+        toast('Logo enregistré.');
+        await charger();
+      }));
+      const err = h('p', { class: 'erreur', role: 'alert' });
+      const btn = h('button', { class: 'btn primaire', type: 'submit' }, nouveau ? 'Ajouter le partenaire' : 'Enregistrer');
+      const form = h('form', { novalidate: true, onsubmit: async (e) => {
+        e.preventDefault(); err.textContent = ''; btn.disabled = true;
+        try {
+          const body = { nom: f.nom.value, description: f.description.value, site_web: f.site.value, telephone_commande: f.tel.value, debut: f.debut.value, fin: f.fin.value };
+          if (nouveau) await api('/sponsors', { method: 'POST', body });
+          else await api(`/sponsors/${s.id}`, { method: 'PUT', body: { ...body, statut: f.statut.value } });
+          d.close(); toast(nouveau ? 'Partenaire ajouté.' : 'Partenaire modifié.'); await charger();
+        } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+      } },
+        champ('Nom de la marque ou du distributeur', f.nom),
+        champ('Présentation (visible par les boutiques)', f.description),
+        h('div', { class: 'duo' }, champ('Site web', f.site), champ('WhatsApp pour les commandes', f.tel, 'Avec l\'indicatif du pays, sans « + » (22997000000).')),
+        h('div', { class: 'duo' }, champ('Début du contrat', f.debut), champ('Fin du contrat', f.fin)),
+        !nouveau && champ('État', f.statut, 'Suspendu : le partenaire disparaît de l\'application et son rapport n\'est plus accessible.'),
+        !nouveau && h('div', { class: 'param' }, h('strong', {}, 'Logo'),
+          h('div', { class: 'actions' }, s.a_logo && h('img', { class: 'sponsor-logo', src: `/partenaires/${s.id}/logo?v=${s.logo_v || 0}`, alt: '' }),
+            h('button', { class: 'btn petit', type: 'button', onclick: () => fichier.click() }, 'Choisir un logo'),
+            s.a_logo && h('button', { class: 'btn petit', type: 'button', onclick: () => agir(null, async () => { await api(`/sponsors/${s.id}/logo`, { method: 'DELETE' }); toast('Logo retiré.'); d.close(); await charger(); }) }, 'Retirer')),
+          h('small', {}, 'N\'ajoutez le logo d\'une marque qu\'avec son accord écrit.'), fichier),
+        err, btn);
+      const d = modale(nouveau ? 'Nouveau partenaire' : 'Modifier le partenaire', form);
+    }
+
+    async function offres(s) {
+      const zone = h('div');
+      modale(`Offres — ${s.nom}`, zone, { large: true });
+      async function dessiner(edition) {
+        const liste = await api(`/sponsors/${s.id}/offres`);
+        const f = {
+          titre: h('input', { required: true, maxlength: 120, value: edition ? edition.titre : '' }),
+          texte: h('input', { maxlength: 300, value: edition && edition.texte ? edition.texte : '' }),
+          debut: h('input', { type: 'date', value: edition ? edition.debut : '' }),
+          fin: h('input', { type: 'date', value: edition && edition.fin ? edition.fin : '' }),
+          actif: h('input', { type: 'checkbox', checked: edition ? edition.actif : true }),
+        };
+        const err = h('p', { class: 'erreur', role: 'alert' });
+        const btn = h('button', { class: 'btn primaire', type: 'submit' }, edition ? 'Enregistrer l\'offre' : 'Ajouter l\'offre');
+        const form = h('form', { novalidate: true, onsubmit: async (e) => {
+          e.preventDefault(); err.textContent = ''; btn.disabled = true;
+          try {
+            const body = { titre: f.titre.value, texte: f.texte.value, debut: f.debut.value, fin: f.fin.value, actif: f.actif.checked };
+            if (edition) await api(`/offres/${edition.id}`, { method: 'PUT', body });
+            else await api(`/sponsors/${s.id}/offres`, { method: 'POST', body });
+            await dessiner(null); await charger();
+          } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+        } },
+          h('h3', {}, edition ? 'Modifier l\'offre' : 'Nouvelle offre'),
+          champ('Titre', f.titre), champ('Détail', f.texte),
+          h('div', { class: 'duo' }, champ('Début', f.debut), champ('Fin', f.fin)),
+          h('label', { class: 'case' }, f.actif, 'Offre active'), err, h('div', { class: 'actions' }, btn,
+            edition && h('button', { class: 'btn', type: 'button', onclick: () => dessiner(null) }, 'Annuler')));
+        remplacer(zone, form, h('hr'), h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+          h('thead', {}, h('tr', {}, ['Offre', 'Période', 'Boutiques ayant vu', 'Ayant cliqué', ''].map((t, i) => h('th', { class: i === 2 || i === 3 ? 'num' : '' }, t)))),
+          h('tbody', {}, liste.length ? liste.map((o) => h('tr', {},
+            h('td', {}, h('strong', {}, o.titre), !o.actif && h('span', { class: 'puce' }, 'Inactive'), o.texte && h('small', { class: 'bloc-pt' }, o.texte)),
+            h('td', {}, `${dateFr(o.debut)}${o.fin ? ' → ' + dateFr(o.fin) : ''}`), h('td', { class: 'num' }, nombre(o.vues)), h('td', { class: 'num' }, nombre(o.clics)),
+            h('td', {}, h('div', { class: 'actions-ligne' },
+              h('button', { class: 'btn petit', type: 'button', onclick: () => dessiner(o) }, 'Modifier'),
+              h('button', { class: 'btn petit', type: 'button', onclick: () => agir(null, async () => {
+                if (!confirm(`Supprimer l'offre « ${o.titre} » ?`)) return;
+                await api(`/offres/${o.id}`, { method: 'DELETE' }); await dessiner(null); await charger();
+              }) }, 'Supprimer'))))) : [h('tr', {}, h('td', { colspan: 5, class: 'aide' }, 'Aucune offre.'))]))));
+      }
+      await dessiner(null);
+    }
+
+    async function commandes(s) {
+      const liste = await api(`/sponsors/${s.id}/commandes`);
+      modale(`Commandes de réassort — ${s.nom}`, liste.length
+        ? h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+          h('thead', {}, h('tr', {}, ['Date', 'Boutique', 'Produits', 'Message'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, liste.map((c) => h('tr', {}, h('td', {}, c.cree_le),
+            h('td', {}, h('strong', {}, c.entreprise), c.telephone && h('small', { class: 'bloc-pt' }, c.telephone)),
+            h('td', {}, c.lignes.map((l) => `${l.nom} × ${l.quantite} ${l.unite}`).join(', ')), h('td', {}, c.note || '—'))))))
+        : h('p', { class: 'aide' }, 'Aucune commande pour le moment.'), { large: true });
+    }
+
+    function rapport(s) {
+      const adresse = (j) => `${location.origin}/sponsor/${j}`;
+      const code = h('code', {}, adresse(s.jeton_rapport));
+      const zone = h('div', {},
+        h('p', {}, 'Cette adresse donne accès au rapport de statistiques anonymes du partenaire, sans mot de passe. Envoyez-la uniquement à la personne concernée.'),
+        h('div', { class: 'copie' }, code,
+          h('button', { class: 'btn petit', type: 'button', onclick: () => navigator.clipboard && navigator.clipboard.writeText(code.textContent).then(() => toast('Adresse copiée.')) }, 'Copier')),
+        h('div', { class: 'actions' },
+          h('a', { class: 'btn', href: adresse(s.jeton_rapport), target: '_blank', rel: 'noopener' }, 'Ouvrir le rapport'),
+          h('button', { class: 'btn', type: 'button', onclick: () => agir(null, async () => {
+            if (!confirm('Créer une nouvelle adresse ? L\'ancienne cessera de fonctionner immédiatement.')) return;
+            const r = await api(`/sponsors/${s.id}/jeton`, { method: 'POST' });
+            s.jeton_rapport = r.jeton_rapport; code.textContent = adresse(r.jeton_rapport); toast('Nouvelle adresse créée.');
+          }) }, 'Renouveler l\'adresse')));
+      modale(`Rapport — ${s.nom}`, zone);
+    }
+
+    remplacer(vue, h('h1', {}, 'Sponsors'),
+      h('p', { class: 'aide' }, 'Marques et distributeurs partenaires : présentation, offres, commandes de réassort et rapport de statistiques anonymes. Ajoutez un partenaire seulement après son accord écrit.'),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primaire', type: 'button', onclick: () => formulaire(null) }, 'Nouveau partenaire')),
+      h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+        h('thead', {}, h('tr', {}, ['Partenaire', 'Contrat', 'État', 'Réseau', 'Commandes', ''].map((t, i) => h('th', { class: i === 4 ? 'num' : '' }, t)))), corps)));
+    await charger();
+  };
+
+  VUES.parametres = async (vue) => {
+    const { parametres: P, webhook_kkiapay: webhook, webhook_fedapay: webhookFeda } = await api('/parametres');
+    const saisies = {};   // clé -> input
+    const aEffacer = new Set();
+
+    const puce = (k) => { const [t, c] = SOURCES[P[k].source] || SOURCES.null; return h('span', { class: `puce ${c}` }, t); };
+
+    // Champ de clé secrète : jamais pré-rempli ; vide = conserver la valeur actuelle
+    function cleSecrete(k, libelle, aide) {
+      const input = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', 'aria-label': libelle,
+        placeholder: P[k].definie ? `Enregistrée (${P[k].apercu}) — laisser vide pour conserver` : 'Coller la clé ici' });
+      saisies[k] = input;
+      return h('div', { class: 'param' },
+        h('div', { class: 'param-tete' }, h('label', {}, libelle), puce(k)),
+        h('div', { class: 'ligne' }, input,
+          P[k].source === 'admin' && h('button', { class: 'btn', type: 'button', onclick: (e) => {
+            if (!confirm(`Effacer la ${libelle.toLowerCase()} enregistrée ?`)) return;
+            aEffacer.add(k);
+            input.value = '';
+            input.disabled = true;
+            input.placeholder = 'Sera effacée à l\'enregistrement';
+            e.currentTarget.disabled = true;
+          } }, 'Effacer')),
+        aide && h('small', {}, aide));
+    }
+
+    function champTexte(k, libelle, aide, type = 'text') {
+      const input = h('input', { type, value: P[k].valeur || '', autocomplete: 'off', spellcheck: 'false', 'aria-label': libelle });
+      saisies[k] = input;
+      return h('div', { class: 'param' }, h('div', { class: 'param-tete' }, h('label', {}, libelle), puce(k)), input, aide && h('small', {}, aide));
+    }
+
+    const sandbox = h('input', { type: 'checkbox', checked: P.kkiapay_sandbox.valeur !== 'false' });
+    const sandboxFeda = h('input', { type: 'checkbox', checked: P.fedapay_sandbox.valeur !== 'false' });
+    const entier = (k, libelle, aide) => {
+      const input = h('input', { type: 'number', inputmode: 'numeric', step: 1, value: P[k].valeur, 'aria-label': libelle });
+      saisies[k] = input;
+      return h('div', { class: 'param' }, h('div', { class: 'param-tete' }, h('label', {}, libelle)), input, aide && h('small', {}, aide));
+    };
+
+    const btn = h('button', { class: 'btn primaire gros', type: 'submit' }, 'Enregistrer les paramètres');
+    const form = h('form', { novalidate: true, onsubmit: (e) => {
+      e.preventDefault();
+      agir(btn, async () => {
+        const valeurs = {};
+        const effacer = [...aEffacer];
+        for (const [k, input] of Object.entries(saisies)) {
+          if (input.disabled) continue;
+          const v = input.value.trim();
+          if (P[k].secret) { if (v) valeurs[k] = v; }
+          else if (v === '') { if (P[k].source === 'admin' && !(k in P && typeof P[k].valeur === 'string' && /^\d+$/.test(P[k].valeur))) effacer.push(k); }
+          else if (v !== String(P[k].valeur || '')) valeurs[k] = v;
+        }
+        if (String(sandbox.checked) !== String(P.kkiapay_sandbox.valeur !== 'false')) valeurs.kkiapay_sandbox = sandbox.checked;
+        if (String(sandboxFeda.checked) !== String(P.fedapay_sandbox.valeur !== 'false')) valeurs.fedapay_sandbox = sandboxFeda.checked;
+        if (!Object.keys(valeurs).length && !effacer.length) { toast('Aucune modification à enregistrer.'); return; }
+        await api('/parametres', { method: 'PUT', body: { valeurs, effacer } });
+        toast('Paramètres enregistrés.');
+        await VUES.parametres(vue);
+      });
+    } },
+      h('section', { class: 'carte' }, h('h2', {}, 'Paiement KkiaPay'),
+        h('p', { class: 'aide' }, 'Ces clés se trouvent dans votre tableau de bord KkiaPay, menu Développeurs → Clés API. Elles sont chiffrées avant d\'être enregistrées et ne sont plus jamais affichées.'),
+        champTexte('kkiapay_public_key', 'Clé publique', 'Visible par les navigateurs : elle sert à ouvrir la fenêtre de paiement.'),
+        cleSecrete('kkiapay_private_key', 'Clé privée', 'Utilisée uniquement par le serveur pour vérifier chaque paiement.'),
+        cleSecrete('kkiapay_secret', 'Clé secrète API', 'Clé secrète du compte KkiaPay. Elle sert aussi à authentifier les notifications (webhook) envoyées par KkiaPay.'),
+        h('div', { class: 'param' }, h('label', { class: 'case' }, sandbox, 'Mode test (sandbox) — aucun vrai argent n\'est débité'),
+          h('small', {}, 'Décochez-le uniquement avec vos clés de production.')),
+        h('div', { class: 'param' }, h('div', { class: 'param-tete' }, h('label', {}, 'Adresse de notification (webhook) à saisir dans KkiaPay')),
+          h('div', { class: 'copie' }, h('code', {}, R.origine() + webhook),
+            h('button', { class: 'btn petit', type: 'button', onclick: () => navigator.clipboard && navigator.clipboard.writeText(R.origine() + webhook).then(() => toast('Adresse copiée.')) }, 'Copier')))),
+      h('section', { class: 'carte' }, h('h2', {}, 'Paiement FedaPay'),
+        h('p', { class: 'aide' }, 'Ces clés se trouvent dans votre tableau de bord FedaPay, menu Paramètres → Clés API. Elles sont chiffrées avant d\'être enregistrées et ne sont plus jamais affichées.'),
+        champTexte('fedapay_public_key', 'Clé publique (pk_…)', 'Visible par les navigateurs : elle sert à ouvrir la fenêtre de paiement.'),
+        cleSecrete('fedapay_secret_key', 'Clé secrète (sk_…)', 'Utilisée uniquement par le serveur pour vérifier chaque paiement auprès de FedaPay.'),
+        cleSecrete('fedapay_webhook_secret', 'Secret du webhook (facultatif)', 'Le serveur revérifie de toute façon chaque transaction auprès de FedaPay.'),
+        h('div', { class: 'param' }, h('label', { class: 'case' }, sandboxFeda, 'Mode test (sandbox) — aucun vrai argent n\'est débité'),
+          h('small', {}, 'Décochez-le uniquement avec vos clés de production (pk_live_… / sk_live_…).')),
+        h('div', { class: 'param' }, h('div', { class: 'param-tete' }, h('label', {}, 'Adresse de notification (webhook) à saisir dans FedaPay')),
+          h('div', { class: 'copie' }, h('code', {}, R.origine() + webhookFeda),
+            h('button', { class: 'btn petit', type: 'button', onclick: () => navigator.clipboard && navigator.clipboard.writeText(R.origine() + webhookFeda).then(() => toast('Adresse copiée.')) }, 'Copier')))),
+      h('section', { class: 'carte' }, h('h2', {}, 'Abonnement'),
+        entier('abonnement_prix', 'Prix mensuel (F CFA)', 'Formule mensuelle. Un changement s\'applique aux paiements suivants.'),
+        entier('abonnement_jours', 'Durée mensuelle (jours)', 'Durée accordée par paiement mensuel.'),
+        entier('abonnement_prix_annuel', 'Prix annuel (F CFA)', 'Formule annuelle.'),
+        entier('abonnement_jours_annuel', 'Durée annuelle (jours)', 'Durée accordée par paiement annuel (365 par défaut).'),
+        entier('essai_jours', 'Jours d\'essai gratuit à l\'inscription', '0 = aucun essai : l\'entreprise doit payer pour commencer.')),
+      btn);
+    remplacer(vue, h('h1', {}, 'Paramètres'), form);
+  };
+
+  // ---------- Mon compte ----------
+  VUES.compte = async (vue) => {
+    const ancien = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
+    const nouveau = h('input', { type: 'password', required: true, minlength: 10, autocomplete: 'new-password' });
+    const btn = h('button', { class: 'btn primaire', type: 'submit' }, 'Changer le mot de passe');
+    const activite = await api('/moi/activite').catch(() => []);
+    remplacer(vue, h('h1', {}, 'Mon compte'),
+      state.admin.mdp_temporaire && h('section', { class: 'carte attention' }, h('p', {}, h('strong', {}, 'Mot de passe provisoire : '), 'choisissez maintenant un mot de passe personnel pour accéder à votre espace.')),
+      h('div', { class: 'deux-col' },
+        h('form', { class: 'carte', novalidate: true, onsubmit: (e) => {
+          e.preventDefault();
+          agir(btn, async () => {
+            await api('/mot-de-passe', { method: 'POST', body: { ancien: ancien.value, nouveau: nouveau.value } });
+            toast('Mot de passe modifié.');
+            state.admin.mdp_temporaire = false;
+            ancien.value = ''; nouveau.value = '';
+            router();
+          });
+        } },
+          h('p', {}, `Connecté en tant que ${state.admin.nom_complet} (${state.admin.email}).`),
+          h('p', {}, h('span', { class: 'puce ok' }, state.admin.role_libelle)),
+          champ('Mot de passe actuel', ancien), champ('Nouveau mot de passe (10 caractères minimum)', nouveau), btn),
+        h('section', { class: 'carte' }, h('h2', {}, 'Mes permissions'),
+          h('p', { class: 'petit-texte' }, `${state.admin.permissions.length} permission(s) attribuée(s) à votre rôle. Elles sont vérifiées par le serveur à chaque action.`),
+          h('p', { class: 'petit-texte' }, state.admin.permissions.join(' · ')))),
+      h('section', { class: 'carte' }, h('h2', {}, 'Mon activité récente'),
+        ui.tableau(['Date', 'Action', 'Cible', 'Résultat'], activite.slice(0, 30).map((a) => [a.cree_le, h('span', { class: 'mono' }, a.action), a.cible_type ? `${a.cible_type} ${a.cible_id || ''}` : '—', ui.puce(a.resultat, a.resultat === 'succes' ? 'ok' : 'alerte')]), { vide: 'Aucune activité enregistrée.' })));
+  };
+
+  // ---------- Aides partagées avec les modules d'espace (admin-super.js, admin-finance.js, admin-securite.js) ----------
+  const ui = {
+    stat: (t, v, detail, alerte) => h('div', { class: 'stat' + (alerte ? ' alerte' : '') },
+      h('span', { class: 'stat-titre' }, t), h('strong', { class: 'stat-valeur' }, typeof v === 'string' ? unite(v) : v), detail && h('span', { class: 'stat-detail' }, detail)),
+    puce: (texte, classe = '') => h('span', { class: `puce ${classe}` }, texte),
+    // colonnes : libellés ; lignes : tableaux de cellules (texte ou éléments) ; { num: [indices de colonnes alignées à droite] }
+    tableau(colonnes, lignes, { vide = 'Aucun élément.', num = [] } = {}) {
+      return h('div', { class: 'tableau-defil' }, h('table', { class: 'tableau' },
+        h('thead', {}, h('tr', {}, colonnes.map((t, i) => h('th', { class: num.includes(i) ? 'num' : '' }, t)))),
+        h('tbody', {}, lignes.length ? lignes.map((l) => h('tr', {}, l.map((c, i) => h('td', { class: num.includes(i) ? 'num' : '' }, c)))) : h('tr', {}, h('td', { colspan: colonnes.length, class: 'aide' }, vide)))));
+    },
+    // Barres simples ou groupées : series = [{ cle, classe }], donnees = [{ libelle, ...valeurs }]
+    barres(donnees, series, titre, fmt = fcfa) {
+      const max = Math.max(1, ...donnees.flatMap((d) => series.map((x) => Number(d[x.cle]) || 0)));
+      return h('div', {}, h('div', { class: 'barres', role: 'img', 'aria-label': titre },
+        donnees.map((d) => h('div', { class: 'barre-groupe', title: `${d.libelle} : ${series.map((x) => `${x.nom} ${fmt(d[x.cle])}`).join(' · ')}` },
+          h('div', { class: 'barre-paire' }, series.map((x) => h('span', { class: `barre-fut ${x.classe || ''}`, style: `height:${Math.max(1, Math.round(((Number(d[x.cle]) || 0) / max) * 100))}%` }))),
+          h('span', { class: 'barre-lib' }, d.libelle)))),
+        series.length > 1 && h('div', { class: 'legende' }, series.map((x) => h('span', {}, h('i', { style: `background:${x.classe === 'depense' ? 'color-mix(in srgb, var(--rouille) 55%, white)' : 'var(--marque)'}` }), x.nom))));
+    },
+    // Fenêtre de formulaire : champs = [{ nom, libelle, type, options, valeur, aide, min, max }]
+    formulaire(titre, champsDef, onSubmit, { bouton = 'Enregistrer', intro } = {}) {
+      const entrees = {};
+      const els = champsDef.map((c) => {
+        let el;
+        if (c.type === 'select') el = h('select', {}, c.options.map(([v, l]) => h('option', { value: v, selected: String(v) === String(c.valeur) }, l)));
+        else if (c.type === 'textarea') { el = h('textarea', { rows: 3, maxlength: c.max || 1000, placeholder: c.placeholder }); el.value = c.valeur || ''; }
+        else el = h('input', { type: c.type || 'text', value: c.valeur === undefined ? '' : c.valeur, min: c.min, max: c.max, step: c.step, placeholder: c.placeholder, autocomplete: 'off' });
+        entrees[c.nom] = el;
+        return champ(c.libelle, el, c.aide);
+      });
+      const btn = h('button', { class: 'btn primaire', type: 'submit' }, bouton);
+      const d = modale(titre, h('form', { novalidate: true, onsubmit: (ev) => {
+        ev.preventDefault();
+        agir(btn, async () => {
+          const v = {};
+          for (const c of champsDef) v[c.nom] = entrees[c.nom].value;
+          await onSubmit(v, d);
+        });
+      } }, intro && h('p', { class: 'aide' }, intro), els, btn));
+      return d;
+    },
+    // Confirmation obligatoire avant une action sensible
+    confirmer(titre, message, { bouton = 'Confirmer' } = {}) {
+      return new Promise((ok) => {
+        let rep = false;
+        const d = modale(titre, [h('p', {}, message), h('div', { class: 'actions' },
+          h('button', { class: 'btn primaire', type: 'button', onclick: () => { rep = true; d.close(); } }, bouton),
+          h('button', { class: 'btn', type: 'button', onclick: () => d.close() }, 'Annuler'))]);
+        d.addEventListener('close', () => ok(rep));
+      });
+    },
+    // Affiche un secret une seule fois (mot de passe provisoire…)
+    secretUnique(titre, valeur, aide) {
+      modale(titre, [h('p', { class: 'code-box' }, valeur),
+        h('div', { class: 'actions' }, h('button', { class: 'btn petit', type: 'button', onclick: () => navigator.clipboard && navigator.clipboard.writeText(valeur).then(() => toast('Copié.')) }, 'Copier')),
+        h('p', { class: 'aide' }, aide || 'Ce mot de passe ne sera plus affiché. Transmettez-le par un canal sûr ; son titulaire devra en choisir un nouveau à sa première connexion.')]);
+    },
+    // Téléchargement authentifié (PDF, export JSON)
+    async telecharger(chemin, { method = 'GET', body, nom = 'document' } = {}) {
+      const res = await R.appeler('/api/admin' + chemin, {
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+        body: body ? JSON.stringify(body) : undefined,
+      }, { delai: 60000 });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.erreur || 'Téléchargement impossible.'); }
+      const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+      const url = URL.createObjectURL(await res.blob());
+      const a = h('a', { href: url, download: m ? m[1] : nom });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    },
+    debounce: (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; },
+    statutDem(s) { return this.statutDemande[s] || [String(s || '—'), '']; },
+    statutDemande: { en_attente: ['À valider', ''], approuvee: ['Approuvée', 'ok'], refusee: ['Refusée', 'alerte'], brouillon: ['Brouillon', ''], annulee: ['Annulée', ''] },
+  };
+
+  const BQA = { h, api, toast, modale, agir, champ, remplacer, fcfa, nombre, dateFr, unite, state, ui, R, router, menus: MENUS, vues: VUES_PAR_ESPACE, partage: {} };
+  (window.BQA_MODULES || []).forEach((m) => m(BQA));
+  VUES_PAR_ESPACE.finance.compte = VUES.compte;
+  VUES_PAR_ESPACE.security.compte = VUES.compte;
+
+  // ---------- Démarrage ----------
+  async function demarrer() {
+    try {
+      state.admin = (await api('/me')).admin;
+    } catch (e) {
+      state.token = null;
+      return afficherConnexion();
+    }
+    // Chaque rôle a son adresse : on y est renvoyé automatiquement (le serveur contrôle de toute façon chaque appel)
+    const cible = `/admin/${state.admin.espace}`;
+    if (location.pathname.replace(/\/+$/, '') !== cible) { location.replace(cible + location.hash); return; }
+    afficherCoque();
+    await router();
+    ouvrirTempsReel();
+  }
+
+  window.addEventListener('hashchange', router);
+  if (state.token) demarrer(); else afficherConnexion();
+})();
