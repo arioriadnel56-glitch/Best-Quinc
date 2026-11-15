@@ -1,4 +1,3 @@
-
 'use strict';
 try { process.loadEnvFile(); } catch { /* pas de fichier .env : on utilise l'environnement */ }
 
