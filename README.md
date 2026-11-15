@@ -11,6 +11,8 @@ Il n'y a plus d'installation Windows : tout passe par le navigateur et la PWA.
 - Interface : HTML/CSS/JS sans étape de compilation (servie par le serveur).
 - Abonnement unique : 3 000 F CFA pour 30 jours (réglable dans `.env`).
 
+Gouvernance à trois administrateurs (Super admin, Finance, Sécurité) : voir [GOUVERNANCE-ADMIN.md](GOUVERNANCE-ADMIN.md).
+
 ## Démarrage
 
 ```bash
