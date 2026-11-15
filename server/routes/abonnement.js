@@ -20,7 +20,7 @@ async function finaliser({ paiementId, entrepriseId, reference }) {
   if (!p) throw new HttpError(404, 'Paiement introuvable.');
   if (p.statut === 'reussi') return { deja_confirme: true };
 
-  const found = await payments.get(p.agregateur);
+  const found = await payments.get(p.agregateur, true);
   if (!found) throw new HttpError(400, "Cet agrégateur n'est pas disponible.");
   const v = await found.provider.verify(found.cfg, reference);
   if (!v.ok) throw new HttpError(400, "Le paiement n'est pas confirmé par l'agrégateur.", { code: 'PAIEMENT_NON_CONFIRME' });
@@ -121,7 +121,7 @@ module.exports = function register(router) {
 
     const reference = String(ctx.body.transactionId || '');
     if (!reference) throw new HttpError(400, 'transactionId manquant.');
-    const found = await payments.get('kkiapay');
+    const found = await payments.get('kkiapay', true);
     if (!found) throw new HttpError(503, 'KkiaPay indisponible.');
     const v = await found.provider.verify(found.cfg, reference);
     if (!v.ok) return { recu: true, ignore: 'transaction non réussie' };
@@ -141,7 +141,7 @@ module.exports = function register(router) {
   // On ne retient que le paiement dont l'identifiant a été transmis à la création de la transaction.
   router.post('/api/webhooks/fedapay', async (ctx) => {
     await limit(`webhook:${ctx.ip}`, 120, 60 * 1000);
-    const found = await payments.get('fedapay');
+    const found = await payments.get('fedapay', true);
     if (!found) throw new HttpError(503, 'FedaPay indisponible.');
     // Pas de confiance dans le contenu reçu : seule la réponse de l'API FedaPay, interrogée avec la clé secrète, fait foi.
     const entite = (ctx.body && (ctx.body.entity || ctx.body.object)) || {};
