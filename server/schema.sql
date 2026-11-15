@@ -383,3 +383,230 @@ CREATE TABLE IF NOT EXISTS bilans (
   UNIQUE (entreprise_id, numero)
 );
 CREATE INDEX IF NOT EXISTS bilans_idx ON bilans (entreprise_id, cree_le DESC);
+
+-- ---------------------------------------------------------------
+-- Gouvernance à trois administrateurs : Super admin, Finance & commerce, Sécurité informatique
+-- Les comptes administrateurs restent dans « admins_plateforme » (existante) : on y ajoute un rôle.
+-- Les permissions par défaut des rôles sont insérées par server/lib/rbac.js (seedSql) à chaque changement du catalogue.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS admin_roles (
+  code        VARCHAR(20) PRIMARY KEY,
+  libelle     VARCHAR(80) NOT NULL,
+  description VARCHAR(300)
+);
+INSERT INTO admin_roles (code, libelle, description) VALUES
+  ('SUPER_ADMIN', 'Super administrateur', 'Propriétaire de la plateforme : tous les privilèges, validation des opérations sensibles'),
+  ('FINANCE_ADMIN', 'Administrateur financier et commercial', 'Finances, abonnements, agrégateurs de paiement, relances, tarification, départs'),
+  ('SECURITY_ADMIN', 'Administrateur de sécurité informatique', 'Accès, sessions, journaux, alertes et rapports de sécurité (informatique uniquement)')
+ON CONFLICT (code) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS admin_permissions (
+  code    VARCHAR(60) PRIMARY KEY,
+  libelle VARCHAR(200) NOT NULL,
+  domaine VARCHAR(10) NOT NULL CHECK (domaine IN ('super', 'finance', 'securite'))
+);
+CREATE TABLE IF NOT EXISTS admin_role_permissions (
+  role       VARCHAR(20) NOT NULL REFERENCES admin_roles(code) ON DELETE CASCADE,
+  permission VARCHAR(60) NOT NULL REFERENCES admin_permissions(code) ON DELETE CASCADE,
+  PRIMARY KEY (role, permission)
+);
+
+ALTER TABLE admins_plateforme ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'SUPER_ADMIN' REFERENCES admin_roles(code);
+ALTER TABLE admins_plateforme ADD COLUMN IF NOT EXISTS mdp_temporaire BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE admins_plateforme ADD COLUMN IF NOT EXISTS derniere_connexion TIMESTAMPTZ;
+ALTER TABLE admins_plateforme ADD COLUMN IF NOT EXISTS bloque_jusqua TIMESTAMPTZ;
+ALTER TABLE admins_plateforme ADD COLUMN IF NOT EXISTS cree_par INT;
+
+-- Sessions des administrateurs (jeton lié à une session révocable)
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id                UUID PRIMARY KEY,
+  admin_id          INT NOT NULL REFERENCES admins_plateforme(id) ON DELETE CASCADE,
+  ip                VARCHAR(64),
+  navigateur        VARCHAR(200),
+  cree_le           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  derniere_activite TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expire_le         TIMESTAMPTZ NOT NULL,
+  revoquee_le       TIMESTAMPTZ,
+  revoquee_par      INT,
+  motif_revocation  VARCHAR(120)
+);
+CREATE INDEX IF NOT EXISTS admin_sessions_admin_idx ON admin_sessions (admin_id, cree_le DESC);
+
+-- Historique des connexions (administrateurs et utilisateurs des entreprises)
+CREATE TABLE IF NOT EXISTS connexions_journal (
+  id            BIGSERIAL PRIMARY KEY,
+  type_compte   VARCHAR(10) NOT NULL CHECK (type_compte IN ('admin', 'entreprise')),
+  compte_id     INT,
+  entreprise_id INT,
+  email         VARCHAR(150),
+  evenement     VARCHAR(12) NOT NULL CHECK (evenement IN ('connexion', 'echec', 'deconnexion')),
+  motif         VARCHAR(80),
+  ip            VARCHAR(64),
+  navigateur    VARCHAR(200),
+  cree_le       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS connexions_journal_date_idx ON connexions_journal (cree_le DESC);
+CREATE INDEX IF NOT EXISTS connexions_journal_email_idx ON connexions_journal (email, cree_le DESC);
+CREATE INDEX IF NOT EXISTS connexions_journal_ip_idx ON connexions_journal (ip, cree_le DESC);
+
+-- Journal d'audit : AJOUT SEULEMENT. Un déclencheur refuse toute modification ou suppression, quel que soit le compte.
+CREATE TABLE IF NOT EXISTS audit_journal (
+  id          BIGSERIAL PRIMARY KEY,
+  cree_le     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  admin_id    INT,
+  admin_email VARCHAR(150),
+  role        VARCHAR(20),
+  action      VARCHAR(80) NOT NULL,
+  cible_type  VARCHAR(40),
+  cible_id    VARCHAR(60),
+  details     JSONB,
+  ip          VARCHAR(64),
+  resultat    VARCHAR(10) NOT NULL DEFAULT 'succes' CHECK (resultat IN ('succes', 'refuse', 'echec'))
+);
+CREATE INDEX IF NOT EXISTS audit_journal_date_idx ON audit_journal (cree_le DESC);
+CREATE INDEX IF NOT EXISTS audit_journal_admin_idx ON audit_journal (admin_id, cree_le DESC);
+CREATE INDEX IF NOT EXISTS audit_journal_action_idx ON audit_journal (action, cree_le DESC);
+
+CREATE OR REPLACE FUNCTION audit_journal_proteger() RETURNS trigger AS $fn$
+BEGIN
+  RAISE EXCEPTION 'Le journal d''audit est protégé : modification et suppression interdites.' USING ERRCODE = '42501';
+END;
+$fn$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS audit_journal_no_change ON audit_journal;
+CREATE TRIGGER audit_journal_no_change BEFORE UPDATE OR DELETE ON audit_journal FOR EACH ROW EXECUTE FUNCTION audit_journal_proteger();
+DROP TRIGGER IF EXISTS audit_journal_no_truncate ON audit_journal;
+CREATE TRIGGER audit_journal_no_truncate BEFORE TRUNCATE ON audit_journal FOR EACH STATEMENT EXECUTE FUNCTION audit_journal_proteger();
+
+-- Alertes et incidents de sécurité informatique
+CREATE TABLE IF NOT EXISTS security_alerts (
+  id          SERIAL PRIMARY KEY,
+  type        VARCHAR(40) NOT NULL,
+  gravite     VARCHAR(10) NOT NULL DEFAULT 'moyenne' CHECK (gravite IN ('faible', 'moyenne', 'haute', 'critique')),
+  statut      VARCHAR(12) NOT NULL DEFAULT 'ouverte' CHECK (statut IN ('ouverte', 'en_cours', 'traitee', 'faux_positif')),
+  titre       VARCHAR(200) NOT NULL,
+  details     JSONB,
+  type_compte VARCHAR(10),
+  compte_id   INT,
+  email       VARCHAR(150),
+  ip          VARCHAR(64),
+  signalee_super BOOLEAN NOT NULL DEFAULT false,
+  note        VARCHAR(500),
+  traitee_par INT,
+  cree_le     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  traitee_le  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS security_alerts_idx ON security_alerts (statut, cree_le DESC);
+
+-- Blocage temporaire et révocation des sessions des utilisateurs d'entreprise
+ALTER TABLE utilisateurs ADD COLUMN IF NOT EXISTS bloque_jusqua TIMESTAMPTZ;
+ALTER TABLE utilisateurs ADD COLUMN IF NOT EXISTS sessions_revoquees_le TIMESTAMPTZ;
+
+-- Clôture contrôlée d'une entreprise (les données sont conservées)
+ALTER TABLE entreprises ADD COLUMN IF NOT EXISTS cloture_le TIMESTAMPTZ;
+ALTER TABLE entreprises ADD COLUMN IF NOT EXISTS conservation_jusqua DATE;
+
+-- Agrégateurs de paiement : métadonnées. Les clés secrètes sont chiffrées dans plateforme_parametres (jamais ici).
+CREATE TABLE IF NOT EXISTS payment_providers (
+  code         VARCHAR(20) PRIMARY KEY,
+  libelle      VARCHAR(80) NOT NULL,
+  actif        BOOLEAN NOT NULL DEFAULT true,
+  url_service  VARCHAR(300),
+  url_callback VARCHAR(300),
+  url_webhook  VARCHAR(300),
+  notes        VARCHAR(500),
+  modifie_le   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  modifie_par  INT
+);
+INSERT INTO payment_providers (code, libelle, actif) VALUES
+  ('kkiapay', 'KkiaPay', true),
+  ('fedapay', 'FedaPay', true),
+  ('cinetpay', 'CinetPay', false)
+ON CONFLICT (code) DO NOTHING;
+
+-- Demandes soumises au Super admin (prolongation, tarif, activation d'un fournisseur, engagement, départs, résiliation)
+CREATE TABLE IF NOT EXISTS subscription_management_requests (
+  id            SERIAL PRIMARY KEY,
+  type          VARCHAR(30) NOT NULL CHECK (type IN ('prolongation', 'tarif', 'agregateur', 'engagement', 'depart_agent', 'resiliation')),
+  statut        VARCHAR(12) NOT NULL DEFAULT 'en_attente' CHECK (statut IN ('brouillon', 'en_attente', 'approuvee', 'refusee', 'annulee')),
+  entreprise_id INT REFERENCES entreprises(id) ON DELETE SET NULL,
+  demandeur_id  INT,
+  demandeur_nom VARCHAR(150),
+  resume        VARCHAR(300) NOT NULL,
+  motif         VARCHAR(1000),
+  donnees       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  verification  JSONB,
+  decide_par    INT,
+  decide_nom    VARCHAR(150),
+  decide_le     TIMESTAMPTZ,
+  decision_note VARCHAR(500),
+  cree_le       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS smr_statut_idx ON subscription_management_requests (statut, cree_le DESC);
+
+-- Entreprises en difficulté de paiement (situation enregistrée, délai proposé)
+CREATE TABLE IF NOT EXISTS entreprises_difficultes (
+  id            SERIAL PRIMARY KEY,
+  entreprise_id INT NOT NULL REFERENCES entreprises(id) ON DELETE CASCADE,
+  situation     VARCHAR(1000) NOT NULL,
+  delai_jours   INT CHECK (delai_jours IS NULL OR delai_jours BETWEEN 1 AND 180),
+  statut        VARCHAR(10) NOT NULL DEFAULT 'ouverte' CHECK (statut IN ('ouverte', 'resolue')),
+  demande_id    INT REFERENCES subscription_management_requests(id) ON DELETE SET NULL,
+  cree_par      INT,
+  cree_le       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS entreprises_difficultes_idx ON entreprises_difficultes (entreprise_id, cree_le DESC);
+
+-- Relances d'abonnement
+CREATE TABLE IF NOT EXISTS subscription_reminders (
+  id            SERIAL PRIMARY KEY,
+  entreprise_id INT NOT NULL REFERENCES entreprises(id) ON DELETE CASCADE,
+  type          VARCHAR(20) NOT NULL CHECK (type IN ('avant_expiration', 'apres_expiration', 'impaye', 'manuelle')),
+  canal         VARCHAR(10) NOT NULL CHECK (canal IN ('email', 'whatsapp')),
+  statut        VARCHAR(12) NOT NULL DEFAULT 'programmee' CHECK (statut IN ('programmee', 'en_cours', 'envoyee', 'echec', 'annulee')),
+  sujet         VARCHAR(200),
+  message       TEXT NOT NULL,
+  programmee_le TIMESTAMPTZ NOT NULL DEFAULT now(),
+  envoyee_le    TIMESTAMPTZ,
+  erreur        VARCHAR(300),
+  reponse       VARCHAR(1000),
+  reponse_le    TIMESTAMPTZ,
+  cle           VARCHAR(80),
+  cree_par      INT,
+  cree_le       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_reminders_cle_uniq ON subscription_reminders (cle) WHERE cle IS NOT NULL;
+CREATE INDEX IF NOT EXISTS subscription_reminders_due_idx ON subscription_reminders (statut, programmee_le);
+CREATE INDEX IF NOT EXISTS subscription_reminders_ent_idx ON subscription_reminders (entreprise_id, cree_le DESC);
+
+-- Dépenses de la plateforme (hébergement, domaines, serveurs, services externes) et budgets
+CREATE TABLE IF NOT EXISTS hosting_expenses (
+  id           SERIAL PRIMARY KEY,
+  categorie    VARCHAR(20) NOT NULL CHECK (categorie IN ('hebergement', 'domaine', 'serveur', 'service_externe', 'autre')),
+  libelle      VARCHAR(150) NOT NULL,
+  fournisseur  VARCHAR(100),
+  montant      INT NOT NULL CHECK (montant > 0),
+  periodicite  VARCHAR(10) NOT NULL DEFAULT 'ponctuelle' CHECK (periodicite IN ('mensuelle', 'annuelle', 'ponctuelle')),
+  date_depense DATE NOT NULL DEFAULT CURRENT_DATE,
+  statut       VARCHAR(12) NOT NULL DEFAULT 'validee' CHECK (statut IN ('en_attente', 'validee', 'refusee', 'annulee')),
+  demande_id   INT REFERENCES subscription_management_requests(id) ON DELETE SET NULL,
+  cree_par     INT,
+  cree_le      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS hosting_expenses_date_idx ON hosting_expenses (date_depense DESC);
+
+CREATE TABLE IF NOT EXISTS budgets_plateforme (
+  mois      CHAR(7) NOT NULL,
+  categorie VARCHAR(20) NOT NULL,
+  montant   INT NOT NULL CHECK (montant >= 0),
+  PRIMARY KEY (mois, categorie)
+);
+
+-- Exports / sauvegardes logiques lancés depuis l'espace Super admin
+CREATE TABLE IF NOT EXISTS sauvegardes_journal (
+  id        SERIAL PRIMARY KEY,
+  admin_id  INT,
+  tables    VARCHAR(500),
+  lignes    INT,
+  octets    INT,
+  cree_le   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
