@@ -10,6 +10,7 @@ const { limit } = require('../lib/ratelimit');
 const settings = require('../lib/settings');
 const recovery = require('../lib/recovery');
 const realtime = require('../lib/realtime');
+const securite = require('../lib/securite');
 
 // Hash factice : on dépense le même temps de calcul quand l'utilisateur n'existe pas
 const DUMMY_HASH = `scrypt$${Buffer.alloc(16).toString('base64')}$${Buffer.alloc(64).toString('base64')}`;
@@ -93,14 +94,21 @@ module.exports = function register(router) {
     await limit(`login-cible:${slug}|${mail}`, 30, 15 * 60 * 1000);
 
     const { rows } = await db.query(
-      `SELECT u.id, u.mot_de_passe_hash, u.actif, e.statut
+      `SELECT u.id, u.entreprise_id, u.mot_de_passe_hash, u.actif, u.bloque_jusqua, e.statut
          FROM utilisateurs u JOIN entreprises e ON e.id = u.entreprise_id
         WHERE e.slug = $1 AND u.email = $2`,
       [slug, mail],
     );
     const u = rows[0];
     const ok = await verifyPassword(pwd, u ? u.mot_de_passe_hash : DUMMY_HASH);
-    if (!u || !ok || !u.actif || u.statut !== 'actif') throw new HttpError(401, 'E-mail ou mot de passe incorrect.');
+    const echec = (motif, message = 'E-mail ou mot de passe incorrect.') => securite
+      .enregistrerConnexion({ type_compte: 'entreprise', compte_id: u ? u.id : null, entreprise_id: u ? u.entreprise_id : null, email: mail, evenement: 'echec', motif, ctx })
+      .then(() => { throw new HttpError(401, message); });
+    if (!u || !ok) await echec(!u ? 'compte_inconnu' : 'mot_de_passe');
+    if (!u.actif || u.statut !== 'actif') await echec('compte_desactive');
+    // Blocage temporaire décidé par l'administrateur de sécurité
+    if (u.bloque_jusqua && new Date(u.bloque_jusqua) > new Date()) await echec('compte_bloque', 'Compte temporairement bloqué pour raison de sécurité. Contactez le support.');
+    await securite.enregistrerConnexion({ type_compte: 'entreprise', compte_id: u.id, entreprise_id: u.entreprise_id, email: mail, evenement: 'connexion', ctx });
     return { token: token(u.id) };
   });
 
