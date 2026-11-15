@@ -86,6 +86,9 @@ async function construire({ apiUrl, sortie }) {
   // ---- Pages produites sans données d'entreprise ----
   const pages = [
     ['/admin', 'admin.html'],
+    ['/admin/super', 'admin/super.html'],
+    ['/admin/finance', 'admin/finance.html'],
+    ['/admin/security', 'admin/security.html'],
     [`/sponsor/${'0'.repeat(48)}`, 'sponsor/index.html'],
     ['/entrer', 'entrer.html'],
     ['/entrer-sw.js', 'entrer-sw.js'],
@@ -134,6 +137,9 @@ async function construire({ apiUrl, sortie }) {
     '/*',
     ...Object.entries(entetes).map(([k, v]) => `  ${k}: ${v}`),
     '/admin',
+    '  Cache-Control: no-store',
+    '  X-Robots-Tag: noindex, nofollow',
+    '/admin/*',
     '  Cache-Control: no-store',
     '  X-Robots-Tag: noindex, nofollow',
     '',
