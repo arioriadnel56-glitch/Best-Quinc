@@ -13,7 +13,8 @@ const LOCK_ID = 727274;
 // Renvoie true si le schéma a été appliqué.
 async function migrate() {
   assertEnv();
-  const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  // Schéma + permissions par défaut des rôles d'administration (générées depuis le catalogue de server/lib/rbac.js)
+  const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8') + '\n' + require('./lib/rbac').seedSql();
   const empreinte = crypto.createHash('sha256').update(sql).digest('hex');
 
   const t = await db.query("SELECT to_regclass('public.schema_migrations') AS t");
