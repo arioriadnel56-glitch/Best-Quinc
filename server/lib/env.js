@@ -1,3 +1,4 @@
+
 'use strict';
 try { process.loadEnvFile(); } catch { /* pas de fichier .env : on utilise l'environnement */ }
 
@@ -48,6 +49,15 @@ const env = {
     // true : à chaque démarrage, crée ce compte ou remet son mot de passe à la valeur de SUPERADMIN_PASSWORD (à retirer ensuite)
     reset: bool(process.env.SUPERADMIN_RESET),
   },
+  // Gouvernance : relances par e-mail (API Resend), tâches planifiées, seuils de validation, durée de conservation des données
+  email: {
+    apiKey: process.env.EMAIL_API_KEY || '',
+    from: (process.env.EMAIL_FROM || '').trim(),
+  },
+  cronSecret: process.env.CRON_SECRET || '',
+  relancesAuto: bool(process.env.RELANCES_AUTO, true),
+  seuilEngagement: num(process.env.SEUIL_ENGAGEMENT, 100000),
+  conservationAns: Math.max(1, num(process.env.CONSERVATION_ANS, 5)),
   kkiapay: {
     publicKey: process.env.KKIAPAY_PUBLIC_KEY || '',
     privateKey: process.env.KKIAPAY_PRIVATE_KEY || '',
