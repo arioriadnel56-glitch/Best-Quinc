@@ -44,7 +44,8 @@ async function authentifier(s, message) {
   try {
     if (p.typ === 'admin') {
       await authAdmin(ctx);
-      s.salon = 'admin'; s.compte = `a:${ctx.admin.id}`;
+      // L'administrateur de sécurité ne reçoit pas les événements financiers (paiements, entreprises) : salon séparé
+      s.salon = ctx.admin.role === 'SECURITY_ADMIN' ? 'admin-securite' : 'admin'; s.compte = `a:${ctx.admin.id}`;
     } else {
       await auth(ctx);
       s.salon = `e:${ctx.user.entreprise_id}`; s.compte = `u:${ctx.user.id}`;
@@ -150,6 +151,7 @@ function fermerEnsemble(ensemble, raison) {
   for (const s of [...ensemble]) s.conn.fermer(4001, raison);
 }
 const fermerUtilisateur = sans((id) => fermerEnsemble(comptes.get(`u:${id}`), 'session terminée'));
+const fermerAdmin = sans((id) => fermerEnsemble(comptes.get(`a:${id}`), 'session terminée'));
 const fermerEntreprise = sans((id) => fermerEnsemble(salons.get(`e:${id}`), 'espace suspendu'));
 
 function arreter() {
@@ -159,4 +161,4 @@ function arreter() {
 
 const stats = () => ({ connexions: sessions.size, salons: salons.size });
 
-module.exports = { attach, publier, publierAdmins, fermerUtilisateur, fermerEntreprise, arreter, stats };
+module.exports = { attach, publier, publierAdmins, fermerUtilisateur, fermerAdmin, fermerEntreprise, arreter, stats };
