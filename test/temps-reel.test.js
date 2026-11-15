@@ -11,7 +11,7 @@ const { trame } = require('../server/lib/ws');
 const jwt = require('../server/lib/jwt');
 
 const SECRET = process.env.JWT_SECRET;
-const jeton = (sub, typ = 'user') => jwt.sign({ sub, typ }, SECRET);
+const jeton = (sub, typ = 'user') => jwt.sign(typ === 'admin' ? { sub, typ, sid: '3f0c7e0e-0000-4000-8000-000000000001' } : { sub, typ }, SECRET);
 const tokUser = jeton(3);
 const tokAutre = jeton(4);
 const tokAdmin = jeton(1, 'admin');
@@ -23,7 +23,7 @@ function base() {
       const id = params[0];
       return { rows: [{ id, entreprise_id: id === 3 ? 9 : 12, nom_complet: 'U', email: 'u@a.fr', role: 'proprietaire', actif: true, entreprise_statut: 'actif' }] };
     }
-    if (sql.includes('FROM admins_plateforme WHERE id')) return { rows: [{ id: 1, nom_complet: 'A', email: 'a@a.fr', actif: true }] };
+    if (sql.includes('JOIN admin_sessions')) return { rows: [{ id: 1, nom_complet: 'A', email: 'a@a.fr', actif: true, role: 'SUPER_ADMIN', sid: '3f0c7e0e-0000-4000-8000-000000000001' }] };
     if (sql.includes('FROM abonnements')) return { rows: [{ id: 1, date_fin: '2099-01-01' }] };
     return { rows: [] };
   });
