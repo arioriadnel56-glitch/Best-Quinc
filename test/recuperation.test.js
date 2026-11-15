@@ -232,9 +232,9 @@ test('changement de mot de passe : ancien requis, mot de passe identique refusé
 
 // ---------- Récupération par le super admin ----------
 test('super admin : mot de passe provisoire et nouveau code, limités à l\'entreprise ciblée', async () => {
-  const adminTok = jwt.sign({ sub: 1, typ: 'admin' }, SECRET);
+  const adminTok = jwt.sign({ sub: 1, typ: 'admin', sid: '3f0c7e0e-0000-4000-8000-000000000001' }, SECRET);
   setHandler(async (sql, params) => {
-    if (sql.includes('FROM admins_plateforme WHERE id')) return { rows: [{ id: 1, nom_complet: 'Adnel', email: 'a@b.fr', actif: true }] };
+    if (sql.includes('JOIN admin_sessions')) return { rows: [{ id: 1, nom_complet: 'Adnel', email: 'a@b.fr', actif: true, role: 'SUPER_ADMIN', sid: '3f0c7e0e-0000-4000-8000-000000000001' }] };
     if (sql.includes('UPDATE utilisateurs') && params.includes(777)) return { rows: [] }; // utilisateur d'une autre entreprise
     if (sql.includes('UPDATE utilisateurs')) return { rows: [{ email: 'p@a.fr' }] };
     return { rows: [] };
