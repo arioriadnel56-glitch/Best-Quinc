@@ -12,7 +12,8 @@ const { offrirJours } = require('../lib/abonnements-admin');
 const audit = require('../lib/audit');
 const securite = require('../lib/securite');
 const { motDePasseFaible } = require('../lib/password');
-const { limit } = require('../lib/ratelimit');
+// CORRECTION ICI : Import direct de la fonction limit si ratelimit.js l'exporte directement
+const limit = require('../lib/ratelimit');
 const { TZ } = require('../lib/tz');
 const settings = require('../lib/settings');
 const { MIN_PWD } = require('../lib/admins');
