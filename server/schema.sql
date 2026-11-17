@@ -610,3 +610,17 @@ CREATE TABLE IF NOT EXISTS sauvegardes_journal (
   octets    INT,
   cree_le   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------------------------------------------------------------
+-- Consentements : ce que l'utilisateur a accepté ou retiré (version du texte + date). Volontairement SANS adresse IP.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS consentements (
+  id            SERIAL PRIMARY KEY,
+  entreprise_id INT NOT NULL REFERENCES entreprises(id) ON DELETE CASCADE,
+  utilisateur_id INT REFERENCES utilisateurs(id) ON DELETE SET NULL,
+  type          VARCHAR(20) NOT NULL CHECK (type IN ('conditions', 'confidentialite', 'partage_stats')),
+  version       VARCHAR(20) NOT NULL,
+  accepte       BOOLEAN NOT NULL,
+  cree_le       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS consentements_ent_idx ON consentements (entreprise_id, type, cree_le DESC);
