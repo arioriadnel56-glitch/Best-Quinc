@@ -21,7 +21,7 @@ const MIME = { '.woff': 'font/woff',
 };
 
 const router = new Router();
-['auth', 'abonnement', 'catalogue', 'sante', 'ventes', 'credits', 'bilans', 'inventaire', 'equipe', 'profil', 'sponsors', 'factures', 'pwa', 'playstore', 'admin', 'admin-super', 'admin-finance', 'admin-finance-ops', 'admin-securite'].forEach((n) => require(`./routes/${n}`)(router));
+['auth', 'abonnement', 'catalogue', 'sante', 'ventes', 'credits', 'bilans', 'inventaire', 'equipe', 'profil', 'sponsors', 'factures', 'pwa', 'playstore', 'admin', 'admin-super', 'admin-finance', 'admin-finance-ops', 'admin-securite', 'legal'].forEach((n) => require(`./routes/${n}`)(router));
 
 function serveAsset(req, res, pathname) {
   let rel;
@@ -72,7 +72,8 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self' https://cdn.kkiapay.me https://cdn.fedapay.com",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
+  // Images : uniquement celles de l'application (logos, factures stockés en base). Pas d'image distante = aucune adresse IP de visiteur envoyée à un tiers.
+  "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "connect-src 'self' ws: wss: https://*.kkiapay.me https://*.fedapay.com",
   "frame-src https://*.kkiapay.me https://*.fedapay.com",
