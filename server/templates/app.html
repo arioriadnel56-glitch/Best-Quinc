@@ -12,12 +12,15 @@
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/consentement.css">
   <style>:root { --marque: {{COULEUR}}; --sur-marque: {{SUR_COULEUR}}; }</style>
 </head>
 <body data-slug="{{SLUG}}" data-nom="{{NOM}}">
   <div id="root"><p class="chargement">Chargement…</p></div>
+  <nav class="pied-legal" aria-label="Informations légales"><a href="/mentions-legales">Mentions légales</a><a href="/confidentialite">Confidentialité</a><a href="/conditions">Conditions générales</a><a href="/cookies">Cookies</a><a href="/engagements">Nos engagements</a><button type="button" data-gerer-cookies>Gérer mes cookies</button></nav>
   <div id="recu-print" aria-hidden="true"></div>
   <div id="toasts" role="status" aria-live="polite"></div>
+  <script src="/assets/consentement.js"></script>
   <script src="/assets/config.js"></script>
   <script src="/assets/reveil.js"></script>
   <script src="/assets/outils.js"></script>
