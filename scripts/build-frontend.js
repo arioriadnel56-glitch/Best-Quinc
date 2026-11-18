@@ -72,7 +72,7 @@ async function construire({ apiUrl, sortie }) {
 
   // ---- Fichiers de l'interface ----
   fs.cpSync(path.join(RACINE, 'public', 'assets'), path.join(dist, 'assets'), { recursive: true });
-  ecrire(dist, 'assets/config.js', `// Généré par scripts/build-frontend.js\nwindow.BQ_CONFIG = ${JSON.stringify({ api, prixStatiques: true })};\n`);
+  ecrire(dist, 'assets/config.js', `// Généré par scripts/build-frontend.js\nwindow.BQ_CONFIG = ${JSON.stringify({ api, prixStatiques: true, essaiJours: env.trialDays })};\n`);
 
   // ---- Landing : tarifs écrits dans la page (aucun visiteur ne réveille le serveur pour les lire) ----
   let landing = String(await rendrePage(router, '/'));
@@ -96,6 +96,9 @@ async function construire({ apiUrl, sortie }) {
     ['/.well-known/assetlinks.json', '.well-known/assetlinks.json'],
     ['/confidentialite', 'confidentialite.html'],
     ['/conditions', 'conditions.html'],
+    ['/mentions-legales', 'mentions-legales.html'],
+    ['/cookies', 'cookies.html'],
+    ['/engagements', 'engagements.html'],
     ['/supprimer-mon-compte', 'supprimer-mon-compte.html'],
     ['/favicon.ico', 'favicon.ico'],
   ];
@@ -122,7 +125,7 @@ async function construire({ apiUrl, sortie }) {
 
   // ---- En-têtes de sécurité : mêmes protections que le serveur, avec l'adresse du backend autorisée pour les appels API ----
   // « _headers » ne s'applique qu'aux fichiers : les réponses des fonctions (/app/…, /sponsor/…) reprennent le même jeu depuis /_app/entetes.json
-  const csp = CSP.replace("connect-src 'self'", `connect-src 'self' ${api}`);
+  const csp = CSP.replace("connect-src 'self'", `connect-src 'self' ${api}`).replace("img-src 'self'", `img-src 'self' ${api}`);
   const entetes = {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
