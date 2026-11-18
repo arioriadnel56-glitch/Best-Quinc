@@ -21,21 +21,25 @@ const token = (userId) => jwt.sign({ sub: userId, typ: 'user' }, env.jwtSecret);
 module.exports = function register(router) {
   // Création d'une entreprise : son espace, son propriétaire et sa configuration PWA
   router.post('/api/entreprises/inscription', async (ctx) => {
+    // 1. Protection contre le spam positionnée en amont de toute vérification métier
+    await limit(`inscription:${ctx.ip}`, 5, 3600 * 1000);
+
     const b = ctx.body;
     const nom = str(b.nom_entreprise, "nom de l'entreprise", { min: 2, max: 150 });
     const nomComplet = str(b.nom_complet, 'votre nom', { min: 2, max: 150 });
     const mail = email(b.email);
     const pwd = str(b.mot_de_passe, 'mot de passe', { min: 8, max: 200 });
     const tel = str(b.telephone, 'téléphone', { optional: true, max: 30 });
+
     // Consentement explicite (jamais présumé) : conditions générales et politique de confidentialité
     if (!(b.accepte_conditions === true || b.accepte_conditions === 'true' || b.accepte_conditions === 'on')) {
       throw new HttpError(400, 'Pour créer votre espace, acceptez les conditions générales et la politique de confidentialité.');
     }
+
     const base = slugify(b.slug ? String(b.slug) : nom);
     verifierMdp(pwd, [mail, base, nomComplet]);
     if (base.length < 3) throw new HttpError(400, "L'identifiant de l'espace doit contenir au moins 3 lettres ou chiffres.");
-    // Limite appliquée après les contrôles gratuits et AVANT le travail coûteux (hachage, écritures) : une demande refusée faute de consentement ne consomme pas le quota
-    await limit(`inscription:${ctx.ip}`, 5, 3600 * 1000);
+
     const hash = await hashPassword(pwd);
     const code = recovery.genererCode();
     const { essaiJours } = await settings.snapshot();
@@ -60,10 +64,15 @@ module.exports = function register(router) {
          VALUES ($1, $2, $3, $4, 'proprietaire', $5) RETURNING id, nom_complet, email, role`,
         [e.id, nomComplet, mail, hash, recovery.empreinte(code)],
       );
+
       // Preuve de ce qui a été accepté : version du texte et date, sans adresse IP
       for (const type of ['conditions', 'confidentialite']) {
-        await q('INSERT INTO consentements (entreprise_id, utilisateur_id, type, version, accepte) VALUES ($1, $2, $3, $4, true)', [e.id, usr.rows[0].id, type, conformite.VERSIONS[type]]);
+        await q(
+          'INSERT INTO consentements (entreprise_id, utilisateur_id, type, version, accepte) VALUES ($1, $2, $3, $4, true)',
+          [e.id, usr.rows[0].id, type, conformite.VERSIONS[type]]
+        );
       }
+
       if (essaiJours > 0) {
         await q(
           `INSERT INTO abonnements (entreprise_id, montant, statut, date_debut, date_fin)
