@@ -7,6 +7,12 @@ const num = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n
 // Vercel renseigne VERCEL=1 : le serveur tourne alors en fonction serverless, derrière le proxy de Vercel.
 const serverless = Boolean(process.env.VERCEL);
 
+// Valeur d'éditeur : celle de l'environnement si elle est renseignée et n'est pas obsolète, sinon la valeur par défaut du dépôt
+function valeurEditeur(brut, defaut, obsoletes = []) {
+  const v = String(brut || '').trim();
+  return !v || obsoletes.includes(v.toLowerCase()) ? defaut : v;
+}
+
 const env = {
   port: num(process.env.PORT, 3000),
   serverless,
@@ -39,8 +45,9 @@ const env = {
   androidPackage: (process.env.ANDROID_PACKAGE_NAME || '').trim(),
   androidSha256: (process.env.ANDROID_SHA256_FINGERPRINTS || '').split(',').map((s) => s.trim().toUpperCase()).filter((s) => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(s)),
   // Pages légales : éditeur du service et contact pour les demandes sur les données personnelles
-  contactEmail: (process.env.CONTACT_EMAIL || 'alobatower@gmail.com').trim(),
-  editeurNom: (process.env.EDITEUR_NOM || 'ARIORI Adnel Adedeji Fulbert').trim(),
+  // Une variable d'hébergeur restée sur une ancienne valeur ou sur un texte provisoire ne doit jamais s'afficher dans les pages légales : on l'ignore.
+  contactEmail: valeurEditeur(process.env.CONTACT_EMAIL, 'alobatower@gmail.com', ['arioriadnel56@gmail.com']),
+  editeurNom: valeurEditeur(process.env.EDITEUR_NOM, 'Aloba Tower', ['administrateur', 'admin']),
   superadmin: {
     email: (process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase(),
     password: process.env.SUPERADMIN_PASSWORD || '',
