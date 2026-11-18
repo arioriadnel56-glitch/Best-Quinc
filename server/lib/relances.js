@@ -3,6 +3,7 @@
 const db = require('./db');
 const { env } = require('./env');
 const notifier = require('./notifier');
+const conformite = require('./conformite');
 
 const dateFr = (iso) => { const [y, m, d] = String(iso).slice(0, 10).split('-'); return `${d}/${m}/${y}`; };
 
@@ -57,8 +58,19 @@ async function envoyer(rel) {
 // Rétention : historique de connexions conservé 1 an, sessions expirées 30 jours. L'audit n'est jamais purgé.
 async function purger() {
   try {
-    await db.query("DELETE FROM connexions_journal WHERE cree_le < now() - interval '365 days'");
+    await db.query('DELETE FROM connexions_journal WHERE cree_le < now() - make_interval(days => $1::int)', [conformite.RETENTION_CONNEXIONS_JOURS]);
     await db.query("DELETE FROM admin_sessions WHERE expire_le < now() - interval '30 days'");
+    // Espaces clôturés dont la durée de conservation annoncée est écoulée : suppression définitive (la politique de confidentialité le promet)
+    const dus = await db.query('SELECT id FROM entreprises WHERE cloture_le IS NOT NULL AND conservation_jusqua IS NOT NULL AND conservation_jusqua < CURRENT_DATE');
+    const ids = (dus.rows || []).map((r) => r.id);
+    if (ids.length) {
+      await db.tx(async (q) => {
+        // Les demandes d'administration gardent une trace, mais sans le nom ni le motif de l'entreprise supprimée
+        await q("UPDATE subscription_management_requests SET resume = 'Entreprise supprimée à l''échéance de conservation', motif = NULL, verification = NULL, donnees = '{}'::jsonb WHERE entreprise_id = ANY($1::int[])", [ids]);
+        await q('DELETE FROM entreprises WHERE id = ANY($1::int[])', [ids]);
+      });
+      await require('./audit').journaliser({ admin: { email: 'système', role: 'SYSTEME' } }, 'retention.entreprises_supprimees', { cible_type: 'entreprise', details: { nombre: ids.length } });
+    }
   } catch (e) { console.error('Purge de rétention impossible :', e.message); }
 }
 
