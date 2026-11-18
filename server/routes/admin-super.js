@@ -205,6 +205,20 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
+  // ---------- Conformité : mentions légales, outils tiers, consentements (lecture seule) ----------
+  router.get('/api/admin/super/conformite', P('conformite.lire'), async () => {
+    const c = require('../lib/conformite');
+    const [cons, sans] = await Promise.all([
+      db.query('SELECT type, version, accepte, COUNT(*)::int AS n FROM consentements GROUP BY type, version, accepte ORDER BY type, version DESC'),
+      db.query("SELECT COUNT(*)::int AS n FROM entreprises e WHERE e.cloture_le IS NULL AND NOT EXISTS (SELECT 1 FROM consentements k WHERE k.entreprise_id = e.id AND k.type = 'conditions' AND k.version = $1 AND k.accepte)", [c.VERSIONS.conditions]),
+    ]);
+    return {
+      versions: c.VERSIONS, mentions_manquantes: c.mentionsManquantes().map(([cle, libelle]) => ({ cle, libelle })), audit: c.auditer(),
+      donnees: c.DONNEES, stockage: [...c.STOCKAGE, ...c.AUTRES_STOCKAGES.map((s) => ({ motif: s.nom, type: 'Navigateur', ...s }))], tiers: c.TIERS,
+      consentements: cons.rows, entreprises_sans_accord_a_jour: (sans.rows[0] && sans.rows[0].n) || 0, retention_connexions_jours: c.RETENTION_CONNEXIONS_JOURS,
+    };
+  });
+
   // ---------- Système : informations et sauvegarde logique ----------
   router.get('/api/admin/super/systeme', P('systeme.gerer'), async () => {
     const [taille, tables, sauvegardes] = await Promise.all([
