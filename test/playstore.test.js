@@ -32,12 +32,12 @@ test('manifeste de la plateforme : démarre sur /entrer, icônes maskable inclus
 });
 
 test('pages légales publiques : contact et suppression de compte', async () => {
-  for (const [url, motif] of [['/confidentialite', /Politique de confidentialité/], ['/conditions', /Conditions d'utilisation/], ['/supprimer-mon-compte', /Supprimer mon espace/]]) {
+  for (const [url, motif] of [['/confidentialite', /Politique de confidentialité/], ['/conditions', /Conditions générales d(?:'|&#39;)utilisation et de vente/], ['/supprimer-mon-compte', /Supprimer mon espace/]]) {
     const r = await appeler(url);
     assert.equal(r.status, 200, url);
     assert.match(r.body, motif);
     assert.match(r.body, /contact@exemple\.bj/);
-    assert.doesNotMatch(r.body, /<script/i);
+    assert.doesNotMatch(r.body, /<script(?![^>]*\ssrc=)/i, 'aucun script en ligne (compatible CSP)');
   }
 });
 
