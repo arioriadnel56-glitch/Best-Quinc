@@ -237,6 +237,31 @@
     memoriserMarque(me.entreprise);
     // Copie de la session pour pouvoir rouvrir l'application sans réseau
     HL.set(cleHL('me'), { utilisateur: me.utilisateur, entreprise: me.entreprise, abonnement: me.abonnement, le: Date.now() }).catch(() => {});
+    if (!state.consentementsVerifie) { state.consentementsVerifie = true; verifierConsentements(); }
+  }
+
+  // Conditions et confidentialité : si le texte a changé depuis votre dernier accord (ou s'il n'y en a pas), on le dit et on demande votre accord.
+  // Rien n'est bloqué : vous pouvez lire les textes, accepter, ou supprimer votre espace.
+  async function verifierConsentements() {
+    try {
+      const d = await api('/consentements');
+      state.consentementsAJour = ['conditions', 'confidentialite'].every((t) => d.consentements.some((c) => c.type === t && c.accepte && c.version === d.versions_actuelles[t]));
+      if (!state.consentementsAJour) setTimeout(rappelConditions, 700);
+    } catch { /* sans réseau : on vérifiera à la prochaine session */ }
+  }
+  function rappelConditions() {
+    const vue = document.getElementById('vue');
+    if (!vue || document.getElementById('bandeau-cgu') || state.consentementsAJour !== false) return;
+    const btn = h('button', { class: 'btn primaire', type: 'button', onclick: () => agir(btn, async () => {
+      await api('/consentements', { method: 'POST', body: { types: ['conditions', 'confidentialite'] } });
+      state.consentementsAJour = true;
+      document.getElementById('bandeau-cgu')?.remove();
+      toast('Merci, votre accord est enregistré.');
+    }) }, 'J\'ai lu et j\'accepte');
+    vue.prepend(h('div', { class: 'bandeau', id: 'bandeau-cgu', role: 'status' },
+      h('span', {}, 'Nos conditions générales et notre politique de confidentialité ont été mises à jour : ',
+        h('a', { href: '/conditions', target: '_blank', rel: 'noopener' }, 'conditions'), ' · ',
+        h('a', { href: '/confidentialite', target: '_blank', rel: 'noopener' }, 'confidentialité'), '. Votre accord est nécessaire pour continuer à les utiliser.'), btn));
   }
 
   // ---------- Temps réel (WebSocket) ----------
@@ -2226,14 +2251,14 @@
 
   // ---------- Abonnement ----------
   function kkiapay(init, cfg) {
-    const charger = () => new Promise((resolve, reject) => {
+    const charger = () => (window.BQConsent ? window.BQConsent.exiger('paiement', 'KkiaPay') : Promise.resolve()).then(() => new Promise((resolve, reject) => {
       if (window.openKkiapayWidget) return resolve();
       const s = document.createElement('script');
       s.src = 'https://cdn.kkiapay.me/k.js';
       s.onload = resolve;
       s.onerror = () => reject(new Error('Impossible de charger KkiaPay. Vérifiez votre connexion.'));
       document.head.append(s);
-    });
+    }));
     return charger().then(() => new Promise((resolve, reject) => {
       const ajouterEcouteur = (evt, fn) => (window.addKkiapayListener ? window.addKkiapayListener(evt, fn) : (evt === 'success' ? window.addSuccessListener(fn) : window.addFailedListener(fn)));
       const retirer = (evt, fn) => { if (window.removeKkiapayListener) window.removeKkiapayListener(evt, fn); };
@@ -2256,14 +2281,14 @@
 
   // FedaPay : widget checkout.js (clé publique seulement ; la confirmation est revérifiée par le serveur)
   function fedapay(init, cfg) {
-    const charger = () => new Promise((resolve, reject) => {
+    const charger = () => (window.BQConsent ? window.BQConsent.exiger('paiement', 'FedaPay') : Promise.resolve()).then(() => new Promise((resolve, reject) => {
       if (window.FedaPay) return resolve();
       const s = document.createElement('script');
       s.src = 'https://cdn.fedapay.com/checkout.js?v=1.1.7';
       s.onload = resolve;
       s.onerror = () => reject(new Error('Impossible de charger FedaPay. Vérifiez votre connexion.'));
       document.head.append(s);
-    });
+    }));
     return charger().then(() => new Promise((resolve, reject) => {
       const widget = window.FedaPay.init({
         public_key: cfg.publicKey,
@@ -2450,6 +2475,18 @@
     const sectionPartage = h('section', { class: 'carte' }, h('h2', {}, 'Partenaires et statistiques'),
       h('label', { class: 'case', for: 'partage-stats' }, partage, 'Partager mes statistiques de vente, de façon anonyme, avec mes partenaires fournisseurs'),
       h('p', { class: 'aide' }, 'Seuls des totaux regroupant au moins 5 boutiques sont transmis (produits du partenaire, villes). Jamais votre nom, vos clients, vos prix d\'achat ni le détail de vos ventes. Désactivable à tout moment.'));
+    const zoneConsent = h('p', { class: 'aide' }, 'Chargement…');
+    api('/consentements').then((d) => {
+      const LIB = { conditions: 'Conditions générales', confidentialite: 'Politique de confidentialité', partage_stats: 'Partage de statistiques avec les partenaires' };
+      zoneConsent.replaceWith(h('ul', { class: 'liste' }, d.consentements.map((c) => h('li', {}, h('span', {}, `${LIB[c.type] || c.type} — version du ${c.version}`),
+        h('span', { class: c.accepte ? 'puce ok' : 'puce' }, `${c.accepte ? 'accepté' : 'retiré'} le ${dateFr(c.date)}`)))));
+    }).catch(() => { zoneConsent.textContent = 'Historique indisponible pour le moment.'; });
+    const sectionConsent = h('section', { class: 'carte' }, h('h2', {}, 'Mes consentements et mes données'), zoneConsent,
+      state.consentementsAJour === false && h('p', { class: 'aide' }, 'Vous n\'avez pas encore accepté la version actuelle des conditions et de la politique de confidentialité : le bandeau en haut de l\'écran vous permet de le faire.'),
+      h('p', { class: 'aide' }, 'Vous gardez la main : ',
+        h('a', { href: '/confidentialite', target: '_blank', rel: 'noopener' }, 'politique de confidentialité'), ' · ',
+        h('a', { href: '/conditions', target: '_blank', rel: 'noopener' }, 'conditions générales'), ' · ',
+        h('button', { class: 'lien', type: 'button', 'data-gerer-cookies': '' }, 'gérer mes cookies'), '. Pour supprimer votre espace et toutes ses données, utilisez le bouton en bas de cette page.'));
     const btn = h('button', { class: 'btn primaire', type: 'submit' }, 'Enregistrer le profil');
 
     remplacer(vue, h('h1', {}, 'Profil de l\'entreprise'),
@@ -2482,6 +2519,7 @@
         h('div', { class: 'actions' }, btn,
           h('button', { class: 'btn', type: 'button', onclick: () => agir(null, apercuModele) }, 'Voir un aperçu de facture'))),
       sectionPartage,
+      sectionConsent,
       estProprio() && zoneSuppression());
   };
 
