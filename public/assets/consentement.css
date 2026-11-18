@@ -1,0 +1,17 @@
+/* Bandeau et fenêtre de consentement : les trois choix ont exactement le même poids visuel (pas de bouton mis en avant). */
+.bq-cookies { position: fixed; z-index: 2147483000; left: 0; right: 0; bottom: 0; padding: .75rem; pointer-events: none; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.bq-cookies.modal { top: 0; display: flex; align-items: center; justify-content: center; background: rgba(18, 32, 44, .55); pointer-events: auto; }
+.bq-cookies-boite { pointer-events: auto; box-sizing: border-box; width: 100%; max-width: 46rem; margin: 0 auto; max-height: 92vh; overflow-y: auto; background: #fff; color: #1C2A33; border: 2px solid #12202C; border-radius: 14px; box-shadow: 0 10px 40px rgba(18, 32, 44, .35); padding: 1rem 1.1rem 1.1rem; }
+.bq-cookies.modal .bq-cookies-boite { max-width: 34rem; }
+.bq-cookies h2 { margin: 0 0 .4rem; font-size: 1.1rem; line-height: 1.3; }
+.bq-cookies p { margin: .3rem 0 .7rem; color: #2B3B46; font-size: .95rem; }
+.bq-cookies a { color: #1F6F78; }
+.bq-cookies-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .6rem; }
+.bq-btn { flex: 1 1 9rem; min-height: 48px; padding: .6rem 1rem; font: inherit; font-weight: 700; color: #12202C; background: #fff; border: 2px solid #12202C; border-radius: 10px; cursor: pointer; }
+.bq-btn:hover { background: #EEF1F4; }
+.bq-cookies :focus-visible { outline: 3px solid #F2B705; outline-offset: 2px; }
+.bq-categorie { display: flex; gap: .7rem; align-items: flex-start; padding: .6rem 0; border-top: 1px solid #D3DAE0; }
+.bq-categorie input { width: 1.4rem; height: 1.4rem; margin-top: .15rem; flex: none; accent-color: #12202C; }
+.bq-categorie label { font-weight: 700; display: block; }
+.bq-categorie small { display: block; font-weight: 400; color: #5B6B77; font-size: .88rem; }
+@media (prefers-reduced-motion: no-preference) { .bq-cookies-boite { animation: bq-monte .18s ease-out; } @keyframes bq-monte { from { transform: translateY(12px); opacity: 0; } } }
