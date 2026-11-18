@@ -26,6 +26,7 @@ const CATALOGUE = [
   ['sponsors.gerer', 'super', 'Gérer les sponsors et leurs offres'],
   ['systeme.gerer', 'super', 'Sauvegardes et paramètres système'],
   ['journal.lire', 'super', 'Consulter toute l\'activité de la plateforme'],
+  ['conformite.lire', 'super', 'Consulter la conformité (mentions légales, outils tiers, consentements)'],
   ['finance.dashboard', 'finance', 'Tableau de bord financier'],
   ['finance.entreprises.lire', 'finance', 'Consulter les entreprises clientes (lecture)'],
   ['finance.paiements.lire', 'finance', 'Consulter les paiements et transactions'],
