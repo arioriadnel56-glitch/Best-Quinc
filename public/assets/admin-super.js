@@ -146,6 +146,31 @@
     await A.partage.securiteAlertes(z);
   };
 
+  // ---------- Conformité ----------
+  V.conformite = async (vue) => {
+    const d = await api('/super/conformite');
+    const ECART = { cookie: 'Cookie', outil_interdit: 'Outil de suivi', hote_non_declare: 'Domaine externe', stockage_non_declare: 'Stockage navigateur', stockage_non_resolu: 'Stockage non analysable', csp: 'Politique de sécurité', promesse: 'Formulation à justifier' };
+    const auditOk = d.audit.ok === true;
+    const accords = d.consentements.filter((c) => c.type === 'conditions' && c.accepte && c.version === d.versions.conditions).reduce((t, c) => t + c.n, 0);
+    remplacer(vue, h('h1', {}, 'Conformité'),
+      h('p', { class: 'aide' }, 'Registre des données, du stockage navigateur et des outils tiers. Les pages publiques (confidentialité, cookies, engagements) sont générées depuis ce registre ; l\'audit ci-dessous relit le code à chaque affichage.'),
+      h('div', { class: 'stats egales' },
+        ui.stat('Audit des outils tiers', d.audit.disponible === false ? 'Indisponible' : (auditOk ? 'Conforme' : `${d.audit.ecarts.length} écart(s)`), d.audit.disponible === false ? 'fichiers non accessibles sur cet hébergement' : `${d.audit.fichiers_analyses} fichiers analysés`, d.audit.disponible !== false && !auditOk),
+        ui.stat('Mentions légales', d.mentions_manquantes.length ? `${d.mentions_manquantes.length} à renseigner` : 'Complètes', 'éditeur et hébergeur', d.mentions_manquantes.length > 0),
+        ui.stat('Textes en vigueur', d.versions.conditions, `confidentialité ${d.versions.confidentialite} · cookies ${d.versions.cookies}`),
+        ui.stat('Accords à jour', nombre(accords), `${nombre(d.entreprises_sans_accord_a_jour)} entreprise(s) sans accord à la version actuelle`, d.entreprises_sans_accord_a_jour > 0)),
+      d.mentions_manquantes.length ? h('section', { class: 'carte attention' }, h('h2', {}, 'Mentions légales à compléter'),
+        h('p', { class: 'petit-texte' }, 'Ces informations sont affichées publiquement dans les mentions légales. Renseignez-les dans les variables d\'environnement de l\'hébergeur, puis redéployez.'),
+        h('ul', { class: 'liste' }, d.mentions_manquantes.map((m) => h('li', {}, h('span', { class: 'mono' }, m.cle), m.libelle)))) : null,
+      !auditOk && d.audit.disponible !== false ? h('section', { class: 'carte attention' }, h('h2', {}, 'Écarts détectés par l\'audit'),
+        ui.tableau(['Type', 'Fichier', 'Détail'], d.audit.ecarts.map((e) => [ECART[e.type] || e.type, h('span', { class: 'mono' }, e.fichier), e.detail]))) : null,
+      h('section', { class: 'carte' }, h('h2', {}, 'Outils et services tiers'), ui.tableau(['Service', 'Pourquoi', 'Données', 'Quand'], d.tiers.map((t) => [h('strong', {}, t.nom), t.finalite, t.donnees, t.declencheur]))),
+      h('section', { class: 'carte' }, h('h2', {}, 'Stockage dans le navigateur (aucun cookie)'), ui.tableau(['Élément', 'Type', 'Finalité', 'Durée'], d.stockage.map((s) => [h('span', { class: 'mono' }, s.motif), s.type, s.finalite, s.duree]))),
+      h('section', { class: 'carte' }, h('h2', {}, 'Données personnelles traitées'), ui.tableau(['Données', 'Finalité', 'Base', 'Durée'], d.donnees.map((x) => [x.donnees, x.finalite, x.base, x.duree])),
+        h('p', { class: 'petit-texte' }, `Historique de connexion supprimé automatiquement après ${d.retention_connexions_jours} jours. Journal d'audit des administrateurs : jamais purgé.`)),
+      h('section', { class: 'carte' }, h('h2', {}, 'Consentements enregistrés'), ui.tableau(['Texte', 'Version', 'Décision', 'Nombre'], d.consentements.map((c) => [c.type, c.version, c.accepte ? 'accepté' : 'retiré', nombre(c.n)]), { vide: 'Aucun consentement enregistré.', num: [3] })));
+  };
+
   // ---------- Système et sauvegardes ----------
   V.systeme = async (vue) => {
     const s = await api('/super/systeme');
