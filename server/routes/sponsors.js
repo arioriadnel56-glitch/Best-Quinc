@@ -182,6 +182,8 @@ module.exports = function register(router) {
   router.put('/api/entreprise/partage-stats', auth, proprio, async (ctx) => {
     if (typeof ctx.body.actif !== 'boolean') throw new HttpError(400, 'Valeur invalide.');
     await db.query('UPDATE entreprises SET partage_stats = $1 WHERE id = $2', [ctx.body.actif, ctx.user.entreprise_id]);
+    await db.query('INSERT INTO consentements (entreprise_id, utilisateur_id, type, version, accepte) VALUES ($1, $2, \'partage_stats\', $3, $4)',
+      [ctx.user.entreprise_id, ctx.user.id, require('../lib/conformite').VERSIONS.confidentialite, ctx.body.actif]);
     return { partage_stats: ctx.body.actif };
   });
 
