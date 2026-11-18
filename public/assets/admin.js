@@ -167,7 +167,7 @@
     super: [
       'Gouvernance', ['tableau', 'Vue d\'ensemble'], ['demandes', 'Demandes à valider'], ['admins', 'Administrateurs'], ['roles', 'Rôles et permissions'], ['activite', 'Activité'],
       'Plateforme', ['entreprises', 'Entreprises'], ['abonnements', 'Abonnements'], ['finances', 'Finances'], ['paiements', 'Paiements'], ['securite', 'Sécurité'], ['sponsors', 'Sponsors'],
-      'Configuration', ['parametres', 'Paramètres'], ['systeme', 'Système et sauvegardes'], ['compte', 'Mon compte'],
+      'Configuration', ['parametres', 'Paramètres'], ['systeme', 'Système et sauvegardes'], ['conformite', 'Conformité'], ['compte', 'Mon compte'],
     ],
     finance: [], security: [],
   };
