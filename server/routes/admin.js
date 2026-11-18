@@ -12,11 +12,7 @@ const { offrirJours } = require('../lib/abonnements-admin');
 const audit = require('../lib/audit');
 const securite = require('../lib/securite');
 const { motDePasseFaible } = require('../lib/password');
-
-// Sécurisation de l'import de limit pour éviter tout crash si le module exporte un objet ou une fonction
-const ratelimitModule = require('../lib/ratelimit');
-const limit = typeof ratelimitModule === 'function' ? ratelimitModule : (ratelimitModule.limit || (async () => {}));
-
+const { limit } = require('../lib/ratelimit');
 const { TZ } = require('../lib/tz');
 const settings = require('../lib/settings');
 const { MIN_PWD } = require('../lib/admins');
@@ -28,6 +24,7 @@ const DUMMY_HASH = `scrypt$${Buffer.alloc(16).toString('base64')}$${Buffer.alloc
 const SESSION_S = 12 * 3600;
 
 module.exports = function register(router) {
+  // Même page pour /admin (connexion) et pour chaque espace ; le rôle est vérifié côté serveur à chaque appel d'API
   const servirAdmin = async (ctx) => {
     ctx.raw = {
       status: 200,
@@ -45,13 +42,9 @@ module.exports = function register(router) {
   router.post('/api/admin/login', async (ctx) => {
     const mail = email(ctx.body.email);
     const pwd = str(ctx.body.mot_de_passe, 'mot de passe', { max: 200 });
-    
-    if (typeof limit === 'function') {
-      await limit(`admin-login:${ctx.ip}|${mail}`, 8, 15 * 60 * 1000);
-      await limit(`admin-login-ip:${ctx.ip}`, 30, 15 * 60 * 1000);
-      await limit(`admin-login-cible:${mail}`, 20, 15 * 60 * 1000);
-    }
-
+    await limit(`admin-login:${ctx.ip}|${mail}`, 8, 15 * 60 * 1000);
+    await limit(`admin-login-ip:${ctx.ip}`, 30, 15 * 60 * 1000);
+    await limit(`admin-login-cible:${mail}`, 20, 15 * 60 * 1000);
     const { rows } = await db.query('SELECT id, nom_complet, email, mot_de_passe_hash, actif, role, mdp_temporaire, bloque_jusqua FROM admins_plateforme WHERE email = $1', [mail]);
     const a = rows[0];
     const ok = await verifyPassword(pwd, a ? a.mot_de_passe_hash : DUMMY_HASH);
@@ -97,20 +90,20 @@ module.exports = function register(router) {
   router.post('/api/admin/mot-de-passe', rbac.connecte, async (ctx) => {
     const ancien = str(ctx.body.ancien, 'ancien mot de passe', { max: 200 });
     const nouveau = str(ctx.body.nouveau, 'nouveau mot de passe', { min: MIN_PWD, max: 200 });
-    if (typeof limit === 'function') {
-      await limit(`admin-mdp:${ctx.admin.id}`, 10, 15 * 60 * 1000);
-    }
+    await limit(`admin-mdp:${ctx.admin.id}`, 10, 15 * 60 * 1000);
     if (nouveau === ancien) throw new HttpError(400, 'Le nouveau mot de passe doit être différent de l\'actuel.');
     const faible = motDePasseFaible(nouveau, [ctx.admin.email, ctx.admin.nom_complet]);
     if (faible) throw new HttpError(400, faible);
     const { rows } = await db.query('SELECT mot_de_passe_hash FROM admins_plateforme WHERE id = $1', [ctx.admin.id]);
     if (!(await verifyPassword(ancien, rows[0].mot_de_passe_hash))) throw new HttpError(400, 'Ancien mot de passe incorrect.');
     await db.query('UPDATE admins_plateforme SET mot_de_passe_hash = $1, mdp_temporaire = false WHERE id = $2', [await hashPassword(nouveau), ctx.admin.id]);
+    // Un changement de mot de passe ferme toutes les AUTRES sessions du compte
     await db.query(`UPDATE admin_sessions SET revoquee_le = now(), motif_revocation = 'mot_de_passe_change' WHERE admin_id = $1 AND id <> $2 AND revoquee_le IS NULL`, [ctx.admin.id, ctx.admin.sid]);
     await audit.journaliser(ctx, 'admin.mdp_change', { cible_type: 'admin', cible_id: ctx.admin.id });
     return { ok: true };
   });
 
+  // Historique d'activité de l'administrateur connecté
   router.get('/api/admin/moi/activite', rbac.connecte, async (ctx) => {
     const { rows } = await db.query(
       `SELECT id, to_char(cree_le AT TIME ZONE $2, 'YYYY-MM-DD HH24:MI:SS') AS cree_le, action, cible_type, cible_id, resultat, ip
@@ -118,6 +111,7 @@ module.exports = function register(router) {
     return rows;
   });
 
+  // Pastilles de notification de chaque espace
   router.get('/api/admin/notifications', rbac.connecte, async (ctx) => {
     const p = await rbac.permissionsDe(ctx.admin.role);
     const items = [];
@@ -137,6 +131,7 @@ module.exports = function register(router) {
     return { total: items.reduce((t, i) => t + i.nombre, 0), items };
   });
 
+  // ---- Vue d'ensemble ----
   router.get('/api/admin/stats', rbac.exiger('super.dashboard'), async () => {
     const [ent, abo, rev, serie] = await Promise.all([
       db.query(
@@ -168,6 +163,7 @@ module.exports = function register(router) {
     return { entreprises: ent.rows[0], abonnes: abo.rows[0], revenus: rev.rows[0], serie: serie.rows };
   });
 
+  // ---- Entreprises ----
   router.get('/api/admin/entreprises', rbac.exiger('finance.entreprises.lire'), async (ctx) => {
     const q = String(ctx.query.q || '').slice(0, 100).replace(/[\\%_]/g, '\\$&');
     const { rows } = await db.query(
@@ -206,6 +202,7 @@ module.exports = function register(router) {
     return { date_fin: fin };
   });
 
+  // ---- Récupération d'accès d'une entreprise ----
   router.get('/api/admin/entreprises/:id/utilisateurs', rbac.exiger('entreprises.gerer'), async (ctx) => {
     const id = int(ctx.params.id, 'entreprise', { min: 1 });
     const { rows } = await db.query(
@@ -244,6 +241,7 @@ module.exports = function register(router) {
     return { email: r.rows[0].email, code_recuperation: code };
   });
 
+  // ---- Paiements ----
   router.get('/api/admin/paiements', rbac.exiger('finance.paiements.lire'), async (ctx) => {
     const statut = ['reussi', 'en_attente', 'echoue'].includes(ctx.query.statut) ? ctx.query.statut : null;
     const { rows } = await db.query(
@@ -272,6 +270,7 @@ module.exports = function register(router) {
     return { ok: true };
   });
 
+  // ---- Paramètres ----
   router.get('/api/admin/parametres', rbac.exiger('parametres.lire'), async () => ({
     parametres: await settings.describe(),
     webhook_kkiapay: '/api/webhooks/kkiapay',
