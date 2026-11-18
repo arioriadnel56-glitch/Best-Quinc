@@ -4,7 +4,7 @@
 // Ainsi un serveur endormi, une connexion lente ou l'absence de réseau ne bloquent jamais l'ouverture.
 const SLUG = '{{SLUG}}' === '*' ? ((new URL(self.registration.scope).pathname.match(/^\/app\/([^/]+)\//) || [])[1] || 'espace') : '{{SLUG}}';
 const CACHE = 'bq-' + SLUG + '-v{{VERSION}}';
-const SHELL = ['./', '/assets/style.css', '/assets/config.js', '/assets/reveil.js', '/assets/outils.js', '/assets/icones.js', '/assets/fonts/carlito-regular.woff', '/assets/fonts/carlito-bold.woff', '/assets/fonts/heros-cn-bold.woff', '/assets/marque/best-quinca-clair.png', '/assets/hors-ligne.js', '/assets/temps-reel.js', '/assets/app.js', 'icon-192.png'];
+const SHELL = ['./', '/assets/style.css', '/assets/consentement.css', '/assets/consentement.js', '/assets/config.js', '/assets/reveil.js', '/assets/outils.js', '/assets/icones.js', '/assets/fonts/carlito-regular.woff', '/assets/fonts/carlito-bold.woff', '/assets/fonts/heros-cn-bold.woff', '/assets/marque/best-quinca-clair.png', '/assets/hors-ligne.js', '/assets/temps-reel.js', '/assets/app.js', 'icon-192.png'];
 const DELAI_MISE_A_JOUR_MS = 8000;
 
 self.addEventListener('install', (event) => {
