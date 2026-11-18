@@ -39,7 +39,7 @@ const env = {
   androidPackage: (process.env.ANDROID_PACKAGE_NAME || '').trim(),
   androidSha256: (process.env.ANDROID_SHA256_FINGERPRINTS || '').split(',').map((s) => s.trim().toUpperCase()).filter((s) => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(s)),
   // Pages légales : éditeur du service et contact pour les demandes sur les données personnelles
-  contactEmail: (process.env.CONTACT_EMAIL || 'arioriadnel56@gmail.com').trim(),
+  contactEmail: (process.env.CONTACT_EMAIL || 'alobatower@gmail.com').trim(),
   editeurNom: (process.env.EDITEUR_NOM || 'ARIORI Adnel Adedeji Fulbert').trim(),
   superadmin: {
     email: (process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase(),
