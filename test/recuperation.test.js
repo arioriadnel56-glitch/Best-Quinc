@@ -133,7 +133,7 @@ test('inscription : le code est renvoyé une fois, seule son empreinte va en bas
     if (sql.includes('INSERT INTO utilisateurs')) return { rows: [{ id: 8, nom_complet: 'Jean', email: 'j@t.fr', role: 'proprietaire' }] };
     return { rows: [] };
   });
-  const r = await post(srv.base, '/api/entreprises/inscription', { nom_entreprise: 'Ets Test', nom_complet: 'Jean Test', email: 'j@t.fr', mot_de_passe: 'Brouette-Ciment-47' });
+  const r = await post(srv.base, '/api/entreprises/inscription', { nom_entreprise: 'Ets Test', nom_complet: 'Jean Test', accepte_conditions: true, email: 'j@t.fr', mot_de_passe: 'Brouette-Ciment-47' });
   assert.equal(r.status, 201);
   const j = await r.json();
   assert.match(j.code_recuperation, /^[A-Z2-9]{5}(-[A-Z2-9]{5}){3}$/);
