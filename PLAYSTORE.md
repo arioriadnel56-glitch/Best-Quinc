@@ -7,7 +7,7 @@ Best-Quinca est une application web installable (PWA). Sur Google Play, elle est
 ## 1. Avant de commencer
 - Le site est **déployé en HTTPS** sur votre domaine (voir `README.md` et `SECURITE.md`), avec `PUBLIC_URL=https://votre-domaine`.
 - Ouvrez ces trois adresses dans un navigateur : `/confidentialite`, `/conditions`, `/supprimer-mon-compte` (déjà fournies par la plateforme, à utiliser dans la Play Console).
-- Vérifiez `CONTACT_EMAIL` et `EDITEUR_NOM` (variables d'environnement) : ils apparaissent dans les pages légales. Par défaut : arioriadnel56@gmail.com / ARIORI Adnel Adedeji Fulbert.
+- Vérifiez `CONTACT_EMAIL` et `EDITEUR_NOM` (variables d'environnement) : ils apparaissent dans les pages légales. Par défaut : alobatower@gmail.com / ARIORI Adnel Adedeji Fulbert.
 - Choisissez le **nom de paquet** de l'application, définitif après publication. Exemple : `bj.bestquinca.app` (minuscules, au moins deux parties).
 
 ## 2. Créer le compte développeur
