@@ -553,3 +553,13 @@ details summary { cursor: pointer; margin: .5rem 0; color: var(--marque); font-w
 .stats.egales > .stat:first-child .stat-valeur { font-size: clamp(2rem, 3vw, 2.6rem); }
 .admin-corps { background: linear-gradient(90deg, #fff 15.5rem, transparent 15.5rem); }
 @media (max-width: 60rem) { .admin-corps { background: none; } }
+
+/* ---------- Pied de page légal et case de consentement ---------- */
+.pied-legal { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem 1.1rem; padding: 1.2rem 1rem 5.5rem; font-size: .92rem; }
+.site-pied .pied-legal { padding: 1rem 0 0; }
+.pied-legal a, .pied-legal button { color: inherit; background: none; border: 0; padding: 0; font: inherit; text-decoration: underline; cursor: pointer; opacity: .92; }
+.pied-legal a:hover, .pied-legal button:hover { opacity: 1; }
+.case-conditions { display: flex; gap: .7rem; align-items: flex-start; margin: .6rem 0 .2rem; line-height: 1.45; }
+.case-conditions input { width: 1.4rem; height: 1.4rem; margin-top: .1rem; flex: none; }
+
+button.lien { background: none; border: 0; padding: 0; font: inherit; color: var(--lien, #1F6F78); text-decoration: underline; cursor: pointer; }
