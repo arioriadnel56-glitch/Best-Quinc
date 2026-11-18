@@ -17,7 +17,17 @@
       const offerts = Math.floor((m.prix * (a.jours / m.jours) - a.prix) / m.prix);
       el.textContent = `Ou ${fcfa(a.prix)} par an${offerts > 0 ? ` : ${offerts} mois offerts` : ''}.`;
     } else if (el) el.remove();
+    afficherEssai(c.essai_jours);
   }).catch(() => { /* le texte par défaut reste affiché */ });
+
+  // Essai gratuit : annoncé seulement s'il existe, avec ce qui se passe à sa fin (jamais de prélèvement automatique)
+  function afficherEssai(jours) {
+    const e = document.getElementById('essai');
+    if (!e || !(jours > 0)) return;
+    e.textContent = `Essai gratuit de ${jours} jours, sans paiement à l'inscription. Ensuite, rien n'est prélevé automatiquement : vous renouvelez quand vous le décidez. `;
+    const a = document.createElement('a'); a.href = '/engagements'; a.textContent = 'Nos engagements'; e.append(a);
+  }
+  if (cfg.essaiJours > 0) afficherEssai(cfg.essaiJours);
 
   const formIns = document.getElementById('form-inscription');
   const errIns = document.getElementById('erreur-inscription');
@@ -28,6 +38,9 @@
     btn.disabled = true;
     try {
       const body = Object.fromEntries(new FormData(formIns));
+      // Consentement explicite : case non cochée par défaut ; la preuve (version, date) est enregistrée côté serveur
+      if (!body.accepte_conditions) throw new Error("Cochez la case pour accepter les conditions générales et la politique de confidentialité.");
+      body.accepte_conditions = true;
       // Créer un espace est une vraie opération serveur : on s'assure qu'il répond (écran de transition le temps du réveil)
       if (!(await R.garantir({ avecEcran: true }))) throw new Error('Le serveur ne répond pas. Réessayez dans un instant.');
       const res = await fetch(R.url('/api/entreprises/inscription'), {
